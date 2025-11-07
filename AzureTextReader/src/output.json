@@ -1,0 +1,150 @@
+{
+  "records": [
+    {
+      "taskId": 1,
+      "externalId": "2025000065660",
+      "workflowName": "Deed Processing",
+      "userData": {
+        "lastName": "Bernes",
+        "firstName": "Judith",
+        "email": "ken.dannett@icloud.com",
+        "camaUsername": 1
+      },
+      "saleData": {
+        "partially_worked_flag": false,
+        "notary_date": "2025-08-20",
+        "buyer_names_component": [
+          {
+            "sourceId": "1",
+            "buyerVesting": "Joint Tenancy",
+            "lastName": "Dannett",
+            "firstName": "Kenneth",
+            "buyerFirstName": "Kenneth",
+            "buyerMiddleName": null,
+            "externalId": "1",
+            "ownerCategory": "Transferee",
+            "buyerIsPrimary": true,
+            "buyerPercentage": 100,
+            "id": 1,
+            "buyerLastName": "Dannett"
+          },
+          {
+            "sourceId": "2",
+            "buyerVesting": "Joint Tenancy",
+            "lastName": "Bernes",
+            "firstName": "Judith",
+            "buyerFirstName": "Judith",
+            "buyerMiddleName": null,
+            "externalId": "2",
+            "ownerCategory": "Transferee",
+            "buyerIsPrimary": false,
+            "buyerPercentage": 100,
+            "id": 2,
+            "buyerLastName": "Bernes"
+          }
+        ],
+        "cos_date": "2025-08-17",
+        "deed_transfer_type": "Purchase",
+        "partial_interest_flag": "No",
+        "reassessability_type": "Transfer",
+        "docstamp_amount": null,
+        "cos_price": "$1,300,000.00",
+        "conveyance": "Purchase",
+        "document_source_id": "2025000065660",
+        "recorded_date": "2025-09-15",
+        "effective_date": "2025-08-17",
+        "buyer_address_component": {
+          "addressCategory": "Mailing Address",
+          "buyerCity": "Westlake Village",
+          "buyerZip": "91361",
+          "id": 1,
+          "buyerStateUS": "CA",
+          "buyerAddressStreetNumber1": "1138 StoneyBrook Lane",
+          "buyerAddressStandard": "1138 StoneyBrook Lane, Westlake Village, CA 91361",
+          "buyerAddressStreetSuffix": null
+        },
+        "exemptions_flag": null,
+        "granting_type": "Sale",
+        "parcel_vesting": "Joint Tenancy",
+        "land_records_from_document": [
+          {
+            "version": "1.0",
+            "createdAt": "2025-09-15",
+            "updatedAt": "2025-09-15",
+            "id": 1,
+            "jurisdictionId": "CA-Ventura",
+            "deleted": "false",
+            "active": "true",
+            "sourceId": "693-0-152-305",
+            "parcelNumber": "693-0-152-305",
+            "parcelSize": null,
+            "assessedValueTotal": null,
+            "assessedValueLand": null,
+            "assessedValueImprovements": null,
+            "region": "Westlake Village",
+            "neighborhood": null,
+            "subdivision": null,
+            "propertyStreet": "1138 Stoneybrook Lane",
+            "propertyCity": "Westlake Village",
+            "propertyState": "CA",
+            "propertyZip": "91361",
+            "propertyUseCode": null,
+            "propertyUseDescription": null,
+            "propertyCategory": "Residential",
+            "customFields": {
+              "cama_sale_history_notes": null,
+              "cama_parcel_legal_description": null,
+              "cama_parcel_extended_legal_description": null
+            },
+            "components": null,
+            "permits": null,
+            "exemptions": null,
+            "landDetails": null,
+            "improvementDetails": null,
+            "propertyValues": null,
+            "errors": null,
+            "specialAssessments": null,
+            "landRecordLocationIds": [],
+            "propertyUseCategory": "Residential",
+            "sourceIdSynthetic": "693-0-152-305"
+          }
+        ],
+        "parcel_match_cards_component": {
+          "mainParcels": [
+            {
+              "sourceId": 1,
+              "propertyStreet": "1138 Stoneybrook Lane",
+              "ownerAddresses": [
+                {
+                  "sourceId": "1",
+                  "zipCode": 91361,
+                  "city": "Westlake Village",
+                  "addressLine1": "1138 StoneyBrook Lane"
+                }
+              ],
+              "ownerSourceIds": [
+                "1"
+              ],
+              "propertyState": "CA",
+              "ownerNames": [
+                "Kenneth S. Dannett",
+                "Judith Bernes"
+              ],
+              "oldOwners": [],
+              "legalDescription": null,
+              "propertyCity": "Westlake Village",
+              "matchScore": 100,
+              "parcelNumber": 693,
+              "newOwners": [],
+              "ownerTypes": [
+                "null"
+              ],
+              "id": 1
+            }
+          ],
+          "potentialMatchParcels": []
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+curl -i -X POST "<your-endpoint>/contentunderstanding/analyzers/<your-analyzer-name>:analyze?api-version=2024-12-01-preview" \
+  -H "Ocp-Apim-Subscription-Key: <your-content-understanding-key>" \
+  -H "Content-Type: application/json" \
+  -d "{\"url\":\"<your-image-url>"}"
+
+
+curl -i -X GET "<your-endpoint>/contentunderstanding/analyzers/<your-analyzer-name>/results/<operation-id>?api-version=2024-12-01-preview" \
+-H "Ocp-Apim-Subscription-Key: <your-content-understanding-key>"
