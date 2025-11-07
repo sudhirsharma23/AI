@@ -71,10 +71,7 @@ $env:AZURE_AI_KEY = "your-key-here"
 
 ### ?? 1. Rotate the Exposed Azure Key (CRITICAL)
 
-The hardcoded key was found in the source code:
-```
-5j4M8CypX3SHzhuzdsddwhGrHyDMlnhIKtve7cqMwgHtjURmiA1DJQQJ99BJAC4f1cMXJ3w3AAAAACOGbrak
-```
+**?? An Azure subscription key was previously hardcoded in source code.**
 
 **Action Required:**
 1. Go to [Azure Portal](https://portal.azure.com)
