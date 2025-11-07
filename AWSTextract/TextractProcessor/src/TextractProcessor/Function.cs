@@ -35,7 +35,7 @@ namespace TextractProcessor
         
         // Configure the upload date and file names to process
   // Format: uploads/<date>/<filename>/<actualfile>
-     private const string UploadDate = "2025-01-20"; // Change this to match your upload date
+     private const string UploadDate = "2025-11-07"; // Change this to match your upload date
         private static readonly string[] DocumentKeys = new[]
         {
             $"uploads/{UploadDate}/2025000065659/2025000065659.tif",
