@@ -1,0 +1,11 @@
+# Place your files here
+
+This folder should contain the .tif, .jpg, .pdf, or other document files you want to upload to S3.
+
+Example files:
+- 2025000065660.tif
+- 2025000065660-1.tif
+- invoice.pdf
+- document.jpg
+
+See README.md in this folder for more details.

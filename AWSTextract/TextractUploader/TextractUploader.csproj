@@ -12,11 +12,17 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Old location - kept for backward compatibility -->
     <None Update="2025000065659.tif">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Update="2025000065659-1.tif">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    
+    <!-- New location - UploadFiles folder -->
+    <None Update="UploadFiles\**\*">
+    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
 

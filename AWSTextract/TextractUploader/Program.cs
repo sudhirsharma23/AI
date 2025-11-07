@@ -19,12 +19,12 @@ namespace TextractUploader
         private const string BucketName = "testbucket-sudhir-bsi1";
 
         private const string UploadFolder = "uploads";
-        // TODO: Replace with the full path to the .tif file you want to upload.
-        private static readonly string[] FilesToUpload = new[]
-        {
-            "2025000065660.tif",
-            "2025000065660-1.tif"
-        };
+
+        // Folder where files are stored (relative to project directory, not bin folder)
+        private const string LocalFilesFolder = "UploadFiles";
+
+        // File extensions to upload (add more as needed)
+        private static readonly string[] SupportedExtensions = new[] { ".tif", ".tiff", ".jpg", ".jpeg", ".pdf", ".png" };
 
         // TODO: Replace with the AWS region of your S3 bucket.
         private static readonly RegionEndpoint BucketRegion = RegionEndpoint.USWest2;
@@ -33,7 +33,7 @@ namespace TextractUploader
 
         static async Task Main(string[] args)
         {
-            Console.WriteLine("=== TextractUploader with Ollama gemma3:latest Demo ===");
+            Console.WriteLine("=== TextractUploader - Automatic File Discovery ===");
             Console.WriteLine();
 
             // Test Ollama gemma3:latest model first
@@ -45,48 +45,104 @@ namespace TextractUploader
 
             _s3Client = new AmazonS3Client(BucketRegion);
 
+            // Get the project directory (not bin folder)
+            var projectDirectory = GetProjectDirectory();
+            var localFilesPath = Path.Combine(projectDirectory, LocalFilesFolder);
+
+            Console.WriteLine($"Project directory: {projectDirectory}");
+            Console.WriteLine($"Reading files from: {localFilesPath}");
+            Console.WriteLine();
+
+            // Check if UploadFiles folder exists
+            if (!Directory.Exists(localFilesPath))
+            {
+                Console.WriteLine($"ERROR: Folder '{LocalFilesFolder}' not found at {localFilesPath}");
+                Console.WriteLine($"Please create the folder and place your files there.");
+                Console.WriteLine();
+                Console.WriteLine("Press any key to exit.");
+                Console.ReadKey();
+                return;
+            }
+
+            // Get all files from UploadFiles folder
+            var allFiles = Directory.GetFiles(localFilesPath, "*.*", SearchOption.TopDirectoryOnly);
+
+            // Filter by supported extensions
+            var filesToUpload = allFiles
+          .Where(f => SupportedExtensions.Contains(Path.GetExtension(f).ToLowerInvariant()))
+      .Select(f => Path.GetFileName(f))
+  .ToArray();
+
+            if (filesToUpload.Length == 0)
+            {
+                Console.WriteLine($"WARNING: No files found in {localFilesPath}");
+                Console.WriteLine($"Supported file types: {string.Join(", ", SupportedExtensions)}");
+                Console.WriteLine();
+                Console.WriteLine("Press any key to exit.");
+                Console.ReadKey();
+                return;
+            }
+
+            Console.WriteLine($"Found {filesToUpload.Length} file(s) to upload:");
+            foreach (var file in filesToUpload)
+            {
+                Console.WriteLine($"  - {file}");
+            }
+            Console.WriteLine();
+
             // Get current date in YYYY-MM-DD format
             var uploadDate = DateTime.Now.ToString("yyyy-MM-dd");
             Console.WriteLine($"Upload date folder: {uploadDate}");
             Console.WriteLine();
 
-            foreach (var fileName in FilesToUpload)
+            int successCount = 0;
+            int failureCount = 0;
+
+            foreach (var fileName in filesToUpload)
             {
-                // Check if file exists locally
-                var filePath = Path.Combine(Directory.GetCurrentDirectory(), fileName);
+                // Check if file exists in UploadFiles folder
+                var filePath = Path.Combine(localFilesPath, fileName);
                 if (!File.Exists(filePath))
                 {
-                    Console.WriteLine($"Error: File {fileName} not found in {Directory.GetCurrentDirectory()}");
+                    Console.WriteLine($"Error: File {fileName} not found in {localFilesPath}");
+                    failureCount++;
                     continue;
                 }
 
                 // Get file name without extension for folder name
                 var fileNameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
-                
+
                 // Create the S3 key with structure: uploads/<date>/<filename>/<actualfile>
                 var key = $"{UploadFolder}/{uploadDate}/{fileNameWithoutExt}/{fileName}";
-     
+
+                // Determine content type based on file extension
+                var contentType = GetContentType(fileName);
+
                 var request = new PutObjectRequest
                 {
                     BucketName = BucketName,
                     Key = key,
                     FilePath = filePath,
-                    ContentType = "image/tiff" // Or "image/jpeg" for JPG files
+                    ContentType = contentType
                 };
 
                 try
                 {
                     Console.WriteLine($"Uploading {fileName}...");
+                    Console.WriteLine($"  Local path: {filePath}");
                     Console.WriteLine($"  S3 Path: {key}");
+                    Console.WriteLine($"  Content Type: {contentType}");
                     var response = await _s3Client.PutObjectAsync(request);
 
                     if (response.HttpStatusCode == System.Net.HttpStatusCode.OK)
                     {
                         Console.WriteLine($"  SUCCESS: Uploaded to s3://{BucketName}/{key}");
+                        successCount++;
                     }
                     else
                     {
                         Console.WriteLine($"  ERROR: Upload failed with status {response.HttpStatusCode}");
+                        failureCount++;
                     }
                 }
                 catch (AmazonS3Exception e)
@@ -94,28 +150,75 @@ namespace TextractUploader
                     Console.WriteLine($"  S3 Error: {e.Message}");
                     Console.WriteLine($"  Error Code: {e.ErrorCode}");
                     Console.WriteLine($"  Request ID: {e.RequestId}");
+                    failureCount++;
                 }
                 catch (Exception e)
                 {
                     Console.WriteLine($"  General Error: {e.Message}");
+                    failureCount++;
                 }
                 Console.WriteLine();
             }
 
             Console.WriteLine("Upload completed!");
+            Console.WriteLine($"  Total files: {filesToUpload.Length}");
+            Console.WriteLine($"  Successful: {successCount}");
+            Console.WriteLine($"  Failed: {failureCount}");
             Console.WriteLine();
-            Console.WriteLine("Folder structure created:");
-      Console.WriteLine($"  {UploadFolder}/");
-         Console.WriteLine($"    {uploadDate}/");
-            foreach (var fileName in FilesToUpload)
+            Console.WriteLine("S3 Folder structure created:");
+            Console.WriteLine($"  {UploadFolder}/");
+            Console.WriteLine($"    {uploadDate}/");
+            foreach (var fileName in filesToUpload)
             {
                 var fileNameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
-           Console.WriteLine($"      {fileNameWithoutExt}/");
-     Console.WriteLine($"        {fileName}");
+                Console.WriteLine($"      {fileNameWithoutExt}/");
+                Console.WriteLine($"        {fileName}");
             }
             Console.WriteLine();
-        Console.WriteLine("Press any key to exit.");
-      Console.ReadKey();
+            Console.WriteLine("Press any key to exit.");
+            Console.ReadKey();
+        }
+
+        /// <summary>
+        /// Gets the project directory (where .csproj file is located)
+        /// Navigates up from bin folder to find project root
+        /// </summary>
+        private static string GetProjectDirectory()
+        {
+            var currentDirectory = Directory.GetCurrentDirectory();
+            var directoryInfo = new DirectoryInfo(currentDirectory);
+
+            // Navigate up from bin/Debug/net9.0 to project root
+            while (directoryInfo != null && !File.Exists(Path.Combine(directoryInfo.FullName, "TextractUploader.csproj")))
+            {
+                directoryInfo = directoryInfo.Parent;
+            }
+
+            if (directoryInfo == null)
+            {
+                // Fallback to current directory if .csproj not found
+                return currentDirectory;
+            }
+
+            return directoryInfo.FullName;
+        }
+
+        /// <summary>
+        /// Determines the content type based on file extension
+        /// </summary>
+        private static string GetContentType(string fileName)
+        {
+            var extension = Path.GetExtension(fileName).ToLowerInvariant();
+            return extension switch
+            {
+                ".tif" or ".tiff" => "image/tiff",
+                ".jpg" or ".jpeg" => "image/jpeg",
+                ".png" => "image/png",
+                ".pdf" => "application/pdf",
+                ".gif" => "image/gif",
+                ".bmp" => "image/bmp",
+                _ => "application/octet-stream"
+            };
         }
 
         private static async Task TestOllamaModel()
@@ -201,8 +304,8 @@ namespace TextractUploader
 
                 startTime = DateTime.Now;
                 var chatResponse = await ollamaService.ChatAsync(
-                    "What is Amazon S3 used for?",
-                    "You are an expert in AWS services."
+                   "What is Amazon S3 used for?",
+                   "You are an expert in AWS services."
                 );
                 duration = (DateTime.Now - startTime).TotalSeconds;
 
@@ -219,12 +322,12 @@ namespace TextractUploader
                 // Step 5: Test document processing
                 Console.WriteLine("[5] Testing document extraction...");
                 var documentPrompt = @"Extract key information from this invoice:
-                                        Invoice Number: INV-2024-001
-                                        Date: 2024-01-15
-                                        Vendor: ABC Company
-                                        Total: $1,250.00
+Invoice Number: INV-2024-001
+Date: 2024-01-15
+Vendor: ABC Company
+Total: $1,250.00
 
-                                        Return as simple text with the 4 fields listed.";
+Return as simple text with the 4 fields listed.";
 
                 Console.WriteLine("Prompt: Document extraction");
                 Console.WriteLine();
