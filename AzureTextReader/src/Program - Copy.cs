@@ -20,7 +20,7 @@
 //{
 // //Azure endpoint and credentials(replace with your actual values)
 // var endpoint = "https://sudhir-ai-test.openai.azure.com/contentunderstanding/analyzers/prebuilt-documentAnalyzer:analyze?api-version=2025-05-01-preview";
-// var subscriptionKey = "5j4M8CypX3SHzhuzdsddwhGrHyDMlnhIKtve7cqMwgHtjURmiA1DJQQJ99BJAC4f1cMXJ3w3AAAAACOGbrak";
+// var subscriptionKey = "";
 // var imageUrls = new[] { "https://github.com/sudhirsharma23/azure-ai-foundry-image-text-extractor/blob/main/src/images/2025000065660-1.tif?raw=true",
 // "https://github.com/sudhirsharma23/azure-ai-foundry-image-text-extractor/blob/main/src/images/2025000065660.tif?raw=true"
 // };

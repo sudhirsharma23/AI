@@ -13,6 +13,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Reflection;
 using System.IO;
+using ImageTextExtractor.Configuration;
 
 namespace ImageTextExtractorApp
 {
@@ -27,11 +28,17 @@ namespace ImageTextExtractorApp
         // Asynchronous method to process all image URLs
         private static async Task RunAsync(IMemoryCache memoryCache)
         {
-            //Azure endpoint and credentials(replace with your actual values)
-            var endpoint = "https://sudhir-ai-test.openai.azure.com/contentunderstanding/analyzers/prebuilt-documentAnalyzer:analyze?api-version=2025-05-01-preview";
-            var subscriptionKey = "5j4M8CypX3SHzhuzdsddwhGrHyDMlnhIKtve7cqMwgHtjURmiA1DJQQJ99BJAC4f1cMXJ3w3AAAAACOGbrak";
+            // SECURE: Load configuration from environment variables, user secrets, or appsettings
+            Console.WriteLine("Loading Azure AI configuration...");
+            var config = AzureAIConfig.Load();
+            config.Validate();
+
+            // Azure endpoint and credentials loaded securely
+            var endpoint = config.Endpoint + "/contentunderstanding/analyzers/prebuilt-documentAnalyzer:analyze?api-version=2025-05-01-preview";
+            var subscriptionKey = config.SubscriptionKey;
+
             var imageUrls = new[] { "https://github.com/sudhirsharma23/azure-ai-foundry-image-text-extractor/blob/main/src/images/2025000065660-1.tif?raw=true",
-                                    "https://github.com/sudhirsharma23/azure-ai-foundry-image-text-extractor/blob/main/src/images/2025000065660.tif?raw=true"
+        "https://github.com/sudhirsharma23/azure-ai-foundry-image-text-extractor/blob/main/src/images/2025000065660.tif?raw=true"
  };
 
             // Use a single HttpClient instance for all requests
@@ -85,9 +92,9 @@ namespace ImageTextExtractorApp
                 {
                     Console.WriteLine($"Parsed ExtractionOperation: status={extractionOperation.status}, contents={extractionOperation.result.contents[0].markdown}");
 
-                    // Initialize the AzureOpenAIClient
+                    // Initialize the AzureOpenAIClient with secure credentials
                     var credential = new ApiKeyCredential(subscriptionKey);
-                    var azureClient = new AzureOpenAIClient(new Uri("https://sudhir-ai-test.openai.azure.com/"), credential);
+                    var azureClient = new AzureOpenAIClient(new Uri(config.Endpoint), credential);
 
                     string schemaText = File.ReadAllText("E:\\Sudhir\\Prj\\files\\zip\\src\\invoice_schema - Copy.json");
                     JsonNode jsonSchema = JsonNode.Parse(schemaText);
@@ -98,38 +105,38 @@ namespace ImageTextExtractorApp
 
                     // Create a list of chat messages
                     var messages = new List<OpenAI.Chat.ChatMessage>
-                                         {
-                                         new SystemChatMessage(@" You are an OCR-like data extraction tool that extracts deed data from tif.
+   {
+      new SystemChatMessage(@" You are an OCR-like data extraction tool that extracts deed data from tif.
 
-                                        1. Extract all values from the attached Deed PDF. Identify and return the following details for each property transaction:
+           1. Extract all values from the attached Deed PDF. Identify and return the following details for each property transaction:
 
-                                        2. Grantor (seller/transferor) name
+          2. Grantor (seller/transferor) name
 
-                                        3. Grantee (buyer/transferee) name
+         3. Grantee (buyer/transferee) name
 
-                                        4. Property address
+                 4. Property address
 
-                                        5. Legal description
+       5. Legal description
 
-                                        6. Sale price or transaction amount
+            6. Sale price or transaction amount
 
-                                        7. Tax information (if present)
+ 7. Tax information (if present)
 
-                                        8. Recording date
+  8. Recording date
 
-                                        9. Document number or reference
+ 9. Document number or reference
 
-                                        10. Notary information and date
+            10. Notary information and date
 
-                                         Any other relevant fields or notes mentioned in the deed
+       Any other relevant fields or notes mentioned in the deed
 
-                                         You are a data transformation tool that takes in JSON data and a reference JSON schema, and outputs JSON data according to the schema.
-                                         Not all of the data in the input JSON will fit the schema, so you may need to omit some data or add null values to the output JSON.
-                                         Translate all data into English if not already in English.
-                                         Ensure values are formatted as specified in the schema (e.g. dates as YYYY-MM-DD).
-                                         Here is the schema: " + $"{jsonSchema}"),
-                                         new UserChatMessage($"Please extract the data, grouping data according to theme/sub groups, and then output into JSON and provide the clean json data {extractionOperation.result.contents[0].markdown}")
-                                         };
+    You are a data transformation tool that takes in JSON data and a reference JSON schema, and outputs JSON data according to the schema.
+           Not all of the data in the input JSON will fit the schema, so you may need to omit some data or add null values to the output JSON.
+           Translate all data into English if not already in English.
+     Ensure values are formatted as specified in the schema (e.g. dates as YYYY-MM-DD).
+        Here is the schema: " + $"{jsonSchema}"),
+     new UserChatMessage($"Please extract the data, grouping data according to theme/sub groups, and then output into JSON and provide the clean json data {extractionOperation.result.contents[0].markdown}")
+           };
 
                     // Create chat completion options
                     var options = new ChatCompletionOptions

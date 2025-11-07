@@ -9,6 +9,20 @@ x86/
 [Aa]rm64/
 bld/
 
+# Secrets and Configuration Files - SECURITY CRITICAL
+appsettings.Development.json
+appsettings.*.json
+!appsettings.json
+*.user.secrets
+secrets.json
+.env
+*.key
+
+# Azure TextReader - Backup files with hardcoded keys
+AzureTextReader/src/Program - Copy (2).cs
+AzureTextReader/src/Program - Copy.cs
+AzureTextReader/src/Program - Redis.cs
+
 # Visual Studio cache/options directory
 .vs/
 

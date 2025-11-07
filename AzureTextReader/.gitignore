@@ -399,3 +399,52 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+
+# ======================================
+# SECURITY: Sensitive Configuration Files
+# ======================================
+# CRITICAL: Never commit files with real credentials!
+**/appsettings.Development.json
+**/appsettings.Local.json
+**/appsettings.Production.json
+**/*.secrets.json
+**/*_secrets.json
+local.settings.json
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Azure credentials
+*.publishsettings
+*.azurePubxml
+
+# AWS credentials  
+.aws/credentials
+
+# ======================================
+# Application Output Files
+# ======================================
+# Generated JSON outputs
+clean_output_*.json
+cleaned_output_*.json
+completion_*.json
+formatted_response_*.json
+raw_response_*.txt
+completion_text_*.txt
+*_merged_*.json
+
+# Cache directories
+CachedFiles_OutputFiles/
+bedrock_responses/
+
+# Log files
+*.log
+*.txt
+!README.txt
+
+# Keep schema files (not sensitive)
+!**/invoice_schema*.json
+!**/schema*.json
+!**/*_schema.json
