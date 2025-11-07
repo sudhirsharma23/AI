@@ -1,0 +1,241 @@
+﻿using Amazon.Lambda.Core;
+using Amazon.S3;
+using Amazon.Textract;
+using Amazon.Textract.Model;
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using System.Text.Json;
+
+// Assembly attribute to enable the Lambda function's JSON input to be converted into a .NET class.
+[assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]
+
+namespace TextractProcessor
+{
+    public class Function
+    {
+        private readonly IAmazonS3 _s3Client;
+        private readonly IAmazonTextract _textractClient;
+
+        // --- CONFIGURATION ---
+        private const string BucketName = "testbucket-sudhir-bsi1";
+        private const string TextractRoleArn = "arn:aws:iam::912532823432:role/accesstextract-role";
+        private const string SnsTopicArn = "arn:aws:sns:us-east-1:912532823432:sns-topic-textract.fifo";
+        private const string DocumentKey = "uploads/2025000065659.tif";
+        private const int MaxRetries = 60; // Maximum number of retries while waiting for job completion
+        private const int RetryInterval = 5000; // Milliseconds to wait between retries
+
+        /// <summary>
+        /// Default constructor. This constructor is used by Lambda to construct the instance. When invoked in a Lambda environment
+        /// the AWS credentials will come from the IAM role associated with the function and the AWS region will be set to the
+        /// region the Lambda function is executed in.
+        /// </summary>
+        public Function()
+        {
+            _s3Client = new AmazonS3Client();
+            _textractClient = new AmazonTextractClient();
+        }
+
+        public class TextractResponse
+        {
+            public string JobId { get; set; }
+            public string JobStatus { get; set; }
+            public List<Dictionary<string, string>> FormData { get; set; }
+            public List<Dictionary<string, object>> TableData { get; set; }
+            public string ErrorMessage { get; set; }
+        }
+
+        /// <summary>
+        /// Process the hardcoded document from S3 using Amazon Textract.
+        /// </summary>
+        /// <param name="context">Lambda context for logging</param>
+        /// <returns>The Textract job ID</returns>
+        public async Task<TextractResponse> FunctionHandler(ILambdaContext context)
+        {
+            try
+            {
+                context.Logger.LogInformation($"Processing file: {DocumentKey} from bucket: {BucketName}");
+
+                var startRequest = new StartDocumentAnalysisRequest
+                {
+                    DocumentLocation = new DocumentLocation
+                    {
+                        S3Object = new S3Object
+                        {
+                            Bucket = BucketName,
+                            Name = DocumentKey
+                        }
+                    },
+                    FeatureTypes = new List<string> { "TABLES", "FORMS" },
+                    NotificationChannel = new NotificationChannel
+                    {
+                        RoleArn = TextractRoleArn,
+                        SNSTopicArn = SnsTopicArn
+                    }
+                };
+
+                var startResponse = await _textractClient.StartDocumentAnalysisAsync(startRequest);
+                var jobId = startResponse.JobId;
+                context.Logger.LogInformation($"Started Textract analysis job with ID: {jobId}");
+
+                // Wait for the job to complete
+                var result = await WaitForJobCompletion(jobId, context);
+                if (result == null)
+                {
+                    return new TextractResponse
+                    {
+                        JobId = jobId,
+                        JobStatus = "FAILED",
+                        ErrorMessage = "Job did not complete within the expected time"
+                    };
+                }
+
+                // Process the results
+                var response = new TextractResponse
+                {
+                    JobId = jobId,
+                    JobStatus = result.JobStatus,
+                    FormData = new List<Dictionary<string, string>>(),
+                    TableData = new List<Dictionary<string, object>>()
+                };
+
+                // Get all results (handling pagination)
+                string nextToken = null;
+                do
+                {
+                    var getResultsRequest = new GetDocumentAnalysisRequest
+                    {
+                        JobId = jobId,
+                        NextToken = nextToken
+                    };
+
+                    var analysisResult = await _textractClient.GetDocumentAnalysisAsync(getResultsRequest);
+                    nextToken = analysisResult.NextToken;
+
+                    // Process form fields
+                    foreach (var block in analysisResult.Blocks)
+                    {
+                        if (block.BlockType == "KEY_VALUE_SET" && block.EntityTypes.Contains("KEY"))
+                        {
+                            var keyValuePair = ExtractKeyValuePair(block, analysisResult.Blocks);
+                            if (keyValuePair != null)
+                            {
+                                response.FormData.Add(keyValuePair);
+                            }
+                        }
+                    }
+
+                    // Process tables
+                    ProcessTables(analysisResult.Blocks, response.TableData);
+
+                } while (nextToken != null);
+
+                context.Logger.LogInformation($"Analysis completed. Found {response.FormData.Count} form fields and {response.TableData.Count} tables.");
+                context.Logger.LogInformation($"Results: {JsonSerializer.Serialize(response, new JsonSerializerOptions { WriteIndented = true })}");
+
+                return response;
+            }
+            catch (Exception e)
+            {
+                context.Logger.LogError($"Error processing file {DocumentKey} from bucket {BucketName}: {e.Message}");
+                return new TextractResponse
+                {
+                    JobStatus = "ERROR",
+                    ErrorMessage = e.Message
+                };
+            }
+        }
+
+        private async Task<GetDocumentAnalysisResponse> WaitForJobCompletion(string jobId, ILambdaContext context)
+        {
+            for (int i = 0; i < MaxRetries; i++)
+            {
+                var getResultsRequest = new GetDocumentAnalysisRequest { JobId = jobId };
+                var result = await _textractClient.GetDocumentAnalysisAsync(getResultsRequest);
+
+                if (result.JobStatus == "SUCCEEDED")
+                {
+                    return result;
+                }
+                else if (result.JobStatus == "FAILED")
+                {
+                    context.Logger.LogError($"Textract job failed: {result.StatusMessage}");
+                    return null;
+                }
+
+                await Task.Delay(RetryInterval);
+            }
+
+            context.Logger.LogError("Job did not complete within the maximum retry attempts");
+            return null;
+        }
+
+        private Dictionary<string, string> ExtractKeyValuePair(Block keyBlock, List<Block> blocks)
+        {
+            try
+            {
+                var keyText = string.Join(" ", keyBlock.Relationships
+                    .FirstOrDefault(r => r.Type == "CHILD")?
+                    .Ids
+                    .Select(id => blocks.First(b => b.Id == id).Text) ?? Array.Empty<string>());
+
+                var valueBlock = blocks.FirstOrDefault(b =>
+                    keyBlock.Relationships.Any(r => r.Type == "VALUE" && r.Ids.Contains(b.Id)));
+
+                if (valueBlock != null)
+                {
+                    var valueText = string.Join(" ", valueBlock.Relationships
+                        .FirstOrDefault(r => r.Type == "CHILD")?
+                        .Ids
+                        .Select(id => blocks.First(b => b.Id == id).Text) ?? Array.Empty<string>());
+
+                    return new Dictionary<string, string> { { keyText.Trim(), valueText.Trim() } };
+                }
+            }
+            catch (Exception)
+            {
+                // Skip malformed key-value pairs
+            }
+
+            return null;
+        }
+
+        private void ProcessTables(List<Block> blocks, List<Dictionary<string, object>> tableData)
+        {
+            var tables = blocks.Where(b => b.BlockType == "TABLE");
+
+            foreach (var table in tables)
+            {
+                var tableDict = new Dictionary<string, object>
+                {
+                    { "TableId", table.Id },
+                    { "Rows", table.RowCount },
+                    { "Columns", table.ColumnCount },
+                    { "Cells", new List<Dictionary<string, string>>() }
+                };
+
+                var cells = blocks.Where(b =>
+                    b.BlockType == "CELL" &&
+                    b.Relationships?.Any(r => r.Type == "CHILD") == true &&
+                    b.Id.StartsWith(table.Id));
+
+                foreach (var cell in cells)
+                {
+                    var cellText = string.Join(" ", cell.Relationships
+                        .FirstOrDefault(r => r.Type == "CHILD")?
+                        .Ids
+                        .Select(id => blocks.First(b => b.Id == id).Text) ?? Array.Empty<string>());
+
+                    ((List<Dictionary<string, string>>)tableDict["Cells"]).Add(new Dictionary<string, string>
+                    {
+                        { "RowIndex", cell.RowIndex.ToString() },
+                        { "ColumnIndex", cell.ColumnIndex.ToString() },
+                        { "Text", cellText.Trim() }
+                    });
+                }
+
+                tableData.Add(tableDict);
+            }
+        }
+    }
+}

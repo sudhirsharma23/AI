@@ -1,0 +1,59 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v9.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v9.0": {
+      "TextractUploader/1.0.0": {
+        "dependencies": {
+          "AWSSDK.S3": "3.7.305.24"
+        },
+        "runtime": {
+          "TextractUploader.dll": {}
+        }
+      },
+      "AWSSDK.Core/3.7.302.8": {
+        "runtime": {
+          "lib/net8.0/AWSSDK.Core.dll": {
+            "assemblyVersion": "3.3.0.0",
+            "fileVersion": "3.7.302.8"
+          }
+        }
+      },
+      "AWSSDK.S3/3.7.305.24": {
+        "dependencies": {
+          "AWSSDK.Core": "3.7.302.8"
+        },
+        "runtime": {
+          "lib/net8.0/AWSSDK.S3.dll": {
+            "assemblyVersion": "3.3.0.0",
+            "fileVersion": "3.7.305.24"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "TextractUploader/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "AWSSDK.Core/3.7.302.8": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-6qKoc8+plcVdGV/pJDJ2T5pXTu+oMKVTCSisg3zB4mbSwsa14YC58QxZF4Ga2fFcpJbi+ChRdOBkpTF4oyTDzA==",
+      "path": "awssdk.core/3.7.302.8",
+      "hashPath": "awssdk.core.3.7.302.8.nupkg.sha512"
+    },
+    "AWSSDK.S3/3.7.305.24": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-nOOpRSE+FPzCDpIFHo2S3nDckPBfny/4oxmGir50xrd7ADe0ivKFE2SdCexkRiVeyyaMNvZu6A/JXmc8ynMtyw==",
+      "path": "awssdk.s3/3.7.305.24",
+      "hashPath": "awssdk.s3.3.7.305.24.nupkg.sha512"
+    }
+  }
+}

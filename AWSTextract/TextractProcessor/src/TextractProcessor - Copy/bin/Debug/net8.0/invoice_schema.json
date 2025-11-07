@@ -1,0 +1,162 @@
+{
+  "records": [
+    {
+      "taskId": "number",
+      "externalId": "string",
+      "workflowName": "string",
+      "userData": {
+        "lastName": "string",
+        "firstName": "string",
+        "email": "string",
+        "camaUsername": "number"
+      },
+      "saleData": {
+        "partially_worked_flag": "boolean",
+        "notary_date": "YYYY-MM-DD",
+        "buyer_names_component": [
+          {
+            "sourceId": "string",
+            "buyerVesting": "string",
+            "lastName": "string",
+            "firstName": "string",
+            "buyerFirstName": "string",
+            "buyerMiddleName": "string",
+            "externalId": "string",
+            "ownerCategory": "string",
+            "buyerIsPrimary": "boolean",
+            "buyerPercentage": "number",
+            "id": "number",
+            "buyerLastName": "string"
+          }
+        ],
+        "cos_date": "string",
+        "deed_transfer_type": "string",
+        "partial_interest_flag": "string",
+        "reassessability_type": "string",
+        "docstamp_amount": "string",
+        "cos_price": "string",
+        "conveyance": "string",
+        "document_source_id": "string",
+        "recorded_date": "string",
+        "effective_date": "string",
+        "buyer_address_component": {
+          "addressCategory": "string",
+          "buyerCity": "string",
+          "buyerZip": "string",
+          "id": "number",
+          "buyerStateUS": "string",
+          "buyerAddressStreetNumber1": "string",
+          "buyerAddressStandard": "string",
+          "buyerAddressStreetSuffix": "string"
+        },
+        "exemptions_flag": "string",
+        "granting_type": "string",
+        "parcel_vesting": "string",
+        "land_records_from_document": [
+          {
+            "version": "string",
+            "createdAt": "string",
+            "updatedAt": "string",
+            "id": "number",
+            "jurisdictionId": "string",
+            "deleted": "string",
+            "active": "string",
+            "sourceId": "string",
+            "parcelNumber": "string",
+            "parcelSize": "string",
+            "assessedValueTotal": "string",
+            "assessedValueLand": "string",
+            "assessedValueImprovements": "string",
+            "region": "string",
+            "neighborhood": "string",
+            "subdivision": "string",
+            "propertyStreet": "string",
+            "propertyCity": "string",
+            "propertyState": "string",
+            "propertyZip": "string",
+            "propertyUseCode": "string",
+            "propertyUseDescription": "string",
+            "propertyCategory": "string",
+            "customFields": {
+              "cama_sale_history_notes": "string",
+              "cama_parcel_legal_description": "string",
+              "cama_parcel_extended_legal_description": "string"
+            },
+            "components": "string",
+            "permits": "string",
+            "exemptions": "string",
+            "landDetails": "string",
+            "improvementDetails": "string",
+            "propertyValues": "string",
+            "errors": "string",
+            "specialAssessments": "string",
+            "landRecordLocationIds": [],
+            "propertyUseCategory": "string",
+            "sourceIdSynthetic": "string"
+          }
+        ],
+        "parcel_match_cards_component": {
+          "mainParcels": [
+            {
+              "sourceId": "number",
+              "propertyStreet": "string",
+              "ownerAddresses": [
+                {
+                  "sourceId": "string",
+                  "zipCode": "number",
+                  "city": "string",
+                  "addressLine1": "string"
+                }
+              ],
+              "ownerSourceIds": [
+                "string"
+              ],
+              "propertyState": "string",
+              "ownerNames": [
+                "string"
+              ],
+              "oldOwners": [
+                {
+                  "sourceId": "string",
+                  "zipCode": "number",
+                  "lastName": "string",
+                  "titleType": "string",
+                  "sequenceNumber": "number",
+                  "city": "string",
+                  "customFields": {
+                    "owner_full_name": "string",
+                    "owner_reassessability_type_name": "string",
+                    "owner_assessee_vesting_type_name": "string",
+                    "owner_base_effective_date": "YYYY-MM-DD",
+                    "owner_base_year": "number",
+                    "owner_date_acquired": "YYYY-MM-DD"
+                  },
+                  "setNumber": "number",
+                  "originalGrantingDocumentNumber": "number",
+                  "principal": "boolean",
+                  "firstName": "string",
+                  "percentage": "number",
+                  "addressLine1": "string",
+                  "id": "number"
+                }
+              ],
+              "legalDescription": "string",
+              "propertyCity": "string",
+              "matchScore": "number",
+              "parcelNumber": "number",
+              "newOwners": [],
+              "ownerTypes": [
+                "null"
+              ],
+              "id": "number"
+            }
+          ],
+          "potentialMatchParcels": [
+          ]
+        },
+        "sale_instrument": "string",
+        "process_owners_from_parcel_match_cards_component_flag": "boolean"
+      }
+    }
+  ]
+}

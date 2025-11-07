@@ -1,0 +1,267 @@
+﻿using System.Text.Json;
+using Microsoft.Extensions.Caching.Memory;
+using System.Reflection;
+using TextractProcessor.Models;
+using System.Text.Json.Nodes;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+
+namespace TextractProcessor.Services
+{
+    public class SchemaMapperService
+    {
+      private readonly BedrockService _bedrockService;
+        private readonly IMemoryCache _cache;
+        private readonly string _outputDirectory;
+        private readonly string _schemaFilePath;
+
+        public SchemaMapperService(BedrockService bedrockService, IMemoryCache cache, string outputDirectory)
+        {
+            _bedrockService = bedrockService;
+       _cache = cache;
+ _outputDirectory = outputDirectory;
+
+          var baseDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+  _schemaFilePath = Path.Combine(baseDirectory!, "invoice_schema.json");
+
+        if (!File.Exists(_schemaFilePath))
+            {
+       var sourceSchemaPath = Path.Combine(
+          Directory.GetCurrentDirectory(),
+"invoice_schema.json");
+
+                if (File.Exists(sourceSchemaPath))
+         {
+ File.Copy(sourceSchemaPath, _schemaFilePath, true);
+                }
+else
+     {
+  throw new FileNotFoundException(
+$"Schema file not found at either {_schemaFilePath} or {sourceSchemaPath}. " +
+ $"Please ensure invoice_schema.json is present in the project directory.");
+         }
+            }
+     }
+
+        public async Task<ProcessingResult> ProcessAndMapSchema(
+   SimplifiedTextractResponse textractResults,
+        string schemaFilePath,
+      string originalFileName)
+        {
+            try
+    {
+      var targetSchema = await File.ReadAllTextAsync(_schemaFilePath);
+                var (mappedJson, inputTokens, outputTokens) = await _bedrockService.ProcessTextractResults(
+          textractResults,
+            targetSchema
+            );
+
+         var cleanedJson = await ValidateAndCleanJson(mappedJson);
+
+      var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+   var baseFileName = Path.GetFileNameWithoutExtension(originalFileName);
+    var mappedFilePath = Path.Combine(_outputDirectory, $"{baseFileName}_mapped_{timestamp}.json");
+
+         await File.WriteAllTextAsync(mappedFilePath, cleanedJson);
+
+              return new ProcessingResult
+   {
+     Success = true,
+   MappedFilePath = mappedFilePath,
+          InputTokens = inputTokens,
+         OutputTokens = outputTokens,
+      TotalCost = CalculateCost(inputTokens, outputTokens)
+};
+    }
+      catch (Exception ex)
+          {
+     return new ProcessingResult
+     {
+             Success = false,
+  Error = $"Schema processing error: {ex.Message}"
+};
+     }
+    }
+
+        private async Task<string> ValidateAndCleanJson(string jsonString)
+        {
+       try
+            {
+  // First, parse with Newtonsoft.Json to handle duplicate keys
+             var jsonReader = new JsonTextReader(new StringReader(jsonString))
+  {
+   DateParseHandling = DateParseHandling.None
+        };
+
+       var jObject = JObject.Load(jsonReader);
+
+     // Handle potential duplicate keys in arrays
+           HandleDuplicateKeysInArrays(jObject);
+
+          // Convert to formatted string
+          var formattedJson = jObject.ToString(Newtonsoft.Json.Formatting.Indented);
+
+                // Validate against schema
+             var schema = await File.ReadAllTextAsync(_schemaFilePath);
+    var schemaDoc = JsonDocument.Parse(schema);
+      var outputDoc = JsonDocument.Parse(formattedJson);
+
+           if (!ValidateJsonStructure(outputDoc.RootElement, schemaDoc.RootElement))
+                {
+ throw new JsonException("Generated JSON does not match the target schema structure");
+            }
+
+      return formattedJson;
+    }
+            catch (JsonReaderException ex)
+            {
+         throw new JsonException($"Invalid JSON format: {ex.Message}", ex);
+         }
+            catch (Exception ex)
+            {
+                throw new JsonException($"Error processing JSON: {ex.Message}", ex);
+}
+        }
+
+  private void HandleDuplicateKeysInArrays(JToken token)
+        {
+      if (token is JObject obj)
+  {
+    var properties = obj.Properties().ToList();
+    foreach (var prop in properties)
+             {
+          if (prop.Value is JArray array)
+                 {
+          // Check for and merge duplicate objects in arrays
+         var uniqueItems = new List<JToken>();
+         foreach (var item in array)
+{
+       HandleDuplicateKeysInArrays(item);
+       if (item is JObject itemObj)
+   {
+      var existing = uniqueItems.FirstOrDefault(x => 
+       x is JObject existingObj && 
+            HasSameKeyProperties(existingObj, itemObj));
+
+            if (existing != null)
+   {
+               MergeObjects((JObject)existing, itemObj);
+            }
+        else
+       {
+           uniqueItems.Add(item);
+        }
+   }
+            else
+             {
+  uniqueItems.Add(item);
+     }
+        }
+          array.Replace(new JArray(uniqueItems));
+       }
+       else
+ {
+ HandleDuplicateKeysInArrays(prop.Value);
+     }
+ }
+            }
+            else if (token is JArray array)
+ {
+      foreach (var item in array)
+      {
+      HandleDuplicateKeysInArrays(item);
+          }
+         }
+        }
+
+   private bool HasSameKeyProperties(JObject obj1, JObject obj2)
+        {
+  // Define your key properties here
+        var keyProperties = new[] { "id", "sourceId", "externalId" };
+          
+    foreach (var key in keyProperties)
+   {
+    if (obj1.TryGetValue(key, out var value1) && 
+        obj2.TryGetValue(key, out var value2))
+              {
+ if (value1.ToString() != value2.ToString())
+  {
+               return false;
+               }
+          }
+            }
+     return true;
+ }
+
+        private void MergeObjects(JObject target, JObject source)
+        {
+            foreach (var property in source.Properties())
+          {
+       if (!target.ContainsKey(property.Name))
+   {
+        target.Add(property.Name, property.Value);
+    }
+    else if (property.Value.Type == JTokenType.Object)
+         {
+         MergeObjects((JObject)target[property.Name], (JObject)property.Value);
+         }
+    }
+        }
+
+        private bool ValidateJsonStructure(JsonElement output, JsonElement schema)
+   {
+            try
+            {
+ if (schema.TryGetProperty("type", out var typeElement))
+                {
+         var schemaType = typeElement.GetString();
+   
+            if (schemaType == "object" && schema.TryGetProperty("properties", out var properties))
+         {
+    foreach (var property in properties.EnumerateObject())
+          {
+        if (output.TryGetProperty(property.Name, out var value))
+    {
+         if (!ValidateJsonStructure(value, property.Value))
+     {
+       return false;
+       }
+        }
+ }
+      }
+   else if (schemaType == "array" && schema.TryGetProperty("items", out var items))
+       {
+  if (output.ValueKind != JsonValueKind.Array)
+           {
+        return false;
+     }
+       
+              foreach (var item in output.EnumerateArray())
+             {
+ if (!ValidateJsonStructure(item, items))
+         {
+       return false;
+    }
+            }
+       }
+         }
+        return true;
+   }
+   catch
+            {
+                return false;
+   }
+        }
+
+        private decimal CalculateCost(int inputTokens, int outputTokens)
+        {
+         const decimal INPUT_COST_PER_1K_TOKENS = 0.008m;
+       const decimal OUTPUT_COST_PER_1K_TOKENS = 0.024m;
+
+        var inputCost = (inputTokens / 1000m) * INPUT_COST_PER_1K_TOKENS;
+var outputCost = (outputTokens / 1000m) * OUTPUT_COST_PER_1K_TOKENS;
+
+            return inputCost + outputCost;
+}
+    }
+}

@@ -1,0 +1,199 @@
+{
+  "records": [
+    {
+      "taskId": 0,
+      "externalId": "2025000065659",
+      "workflowName": "Grant Deed",
+      "userData": {
+        "lastName": "Shapiro",
+        "firstName": "Charles",
+        "email": "N/A",
+        "camaUsername": 0
+      },
+      "saleData": {
+        "partially_worked_flag": false,
+        "notary_date": "2025-09-09",
+        "buyer_names_component": [
+          {
+            "sourceId": "2025000065659",
+            "buyerVesting": "AS CO-TRUSTEES OF THE SHAPIRO FAMILY TRUST",
+            "lastName": "Shapiro",
+            "firstName": "Charles",
+            "buyerFirstName": "Charles",
+            "buyerMiddleName": "David",
+            "externalId": "2025000065659",
+            "ownerCategory": "Buyer",
+            "buyerIsPrimary": true,
+            "buyerPercentage": 50,
+            "id": 1,
+            "buyerLastName": "Shapiro"
+          },
+          {
+            "sourceId": "2025000065659",
+            "buyerVesting": "AS CO-TRUSTEES OF THE SHAPIRO FAMILY TRUST",
+            "lastName": "Shapiro",
+            "firstName": "Suzanne",
+            "buyerFirstName": "Suzanne",
+            "buyerMiddleName": "Denise",
+            "externalId": "2025000065659",
+            "ownerCategory": "Buyer",
+            "buyerIsPrimary": false,
+            "buyerPercentage": 50,
+            "id": 2,
+            "buyerLastName": "Shapiro"
+          }
+        ],
+        "cos_date": "2025-09-15",
+        "deed_transfer_type": "Grant Deed",
+        "partial_interest_flag": "N",
+        "reassessability_type": "Exempt",
+        "docstamp_amount": "0",
+        "cos_price": "0",
+        "conveyance": "For valuable consideration, receipt of which is hereby acknowledged, CHARLES D. SHAPIRO AND SUZANNE D. SHAPIRO, HUSBAND AND WIFE AS JOINT TENANTS hereby GRANT(S) to CHARLES DAVID SHAPIRO AND SUZANNE DENISE SHAPIRO, AS CO-TRUSTEES OF THE SHAPIRO FAMILY TRUST the real property situated in the County of VENTURA, State of California, more particularly described as follows: SEE ATTACHED EXHIBIT \"A\"",
+        "document_source_id": "2025000065659",
+        "recorded_date": "2025-09-15",
+        "effective_date": "2025-09-09",
+        "buyer_address_component": {
+          "addressCategory": "Mailing",
+          "buyerCity": "Thousand Oaks",
+          "buyerZip": "91360",
+          "id": 1,
+          "buyerStateUS": "CA",
+          "buyerAddressStreetNumber1": "516",
+          "buyerAddressStandard": "516 TIMBERWOOD AVENUE",
+          "buyerAddressStreetSuffix": "AVENUE"
+        },
+        "exemptions_flag": "Y",
+        "granting_type": "Husband and Wife as Joint Tenants",
+        "parcel_vesting": "AS CO-TRUSTEES OF THE SHAPIRO FAMILY TRUST",
+        "land_records_from_document": [
+          {
+            "version": "1.0",
+            "createdAt": "2025-09-15",
+            "updatedAt": "2025-09-15",
+            "id": 1,
+            "jurisdictionId": "Ventura County",
+            "deleted": "N",
+            "active": "Y",
+            "sourceId": "2025000065659",
+            "parcelNumber": "551-0-151-585",
+            "parcelSize": "N/A",
+            "assessedValueTotal": "N/A",
+            "assessedValueLand": "N/A",
+            "assessedValueImprovements": "N/A",
+            "region": "N/A",
+            "neighborhood": "N/A",
+            "subdivision": "N/A",
+            "propertyStreet": "516 TIMBERWOOD AVENUE",
+            "propertyCity": "Thousand Oaks",
+            "propertyState": "CA",
+            "propertyZip": "91360",
+            "propertyUseCode": "N/A",
+            "propertyUseDescription": "N/A",
+            "propertyCategory": "N/A",
+            "customFields": {
+              "cama_sale_history_notes": "N/A",
+              "cama_parcel_legal_description": "LOT 9 OF TRACT NO. 4305, IN THE CITY OF THOUSAND OAKS, COUNTY OF VENTURA, STATE OF CALIFORNIA, AS PER MAP RECORDED IN BOOK 115, PAGE(S) 3 THROUGH 6 OF MAPS IN THE OFFICE OF THE COUNTY RECORDER OF SAID COUNTY.",
+              "cama_parcel_extended_legal_description": "EXCEPT THEREFROM ALL, GAS OTHER HYDROCARBON SUBSTANCES AND MINERALS IN AND UNDER SAID LAND, BUT WITHOUT THE RIGHT TO ENTER UPON THE SURFACE THEREOF OR WITHIN 500 FEET BENEATH THE SURFACE FOR THE PURPOSE OF EXPLORING FOR OR EXTRACTING SUCH OIL, GAS OR OTHER HYDROCARBON SUBSTANCES AND MINERALS."
+            },
+            "components": "N/A",
+            "permits": "N/A",
+            "exemptions": "N/A",
+            "landDetails": "N/A",
+            "improvementDetails": "N/A",
+            "propertyValues": "N/A",
+            "errors": "N/A",
+            "specialAssessments": "N/A",
+            "landRecordLocationIds": [],
+            "propertyUseCategory": "N/A",
+            "sourceIdSynthetic": "2025000065659"
+          }
+        ],
+        "parcel_match_cards_component": {
+          "mainParcels": [
+            {
+              "sourceId": 1,
+              "propertyStreet": "516 TIMBERWOOD AVENUE",
+              "ownerAddresses": [
+                {
+                  "sourceId": "2025000065659",
+                  "zipCode": 91360,
+                  "city": "Thousand Oaks",
+                  "addressLine1": "516 TIMBERWOOD AVENUE"
+                }
+              ],
+              "ownerSourceIds": [
+                "2025000065659"
+              ],
+              "propertyState": "CA",
+              "ownerNames": [
+                "CHARLES DAVID SHAPIRO",
+                "SUZANNE DENISE SHAPIRO"
+              ],
+              "oldOwners": [
+                {
+                  "sourceId": "2025000065659",
+                  "zipCode": 91360,
+                  "lastName": "Shapiro",
+                  "titleType": "Husband and Wife as Joint Tenants",
+                  "sequenceNumber": 1,
+                  "city": "Thousand Oaks",
+                  "customFields": {
+                    "owner_full_name": "CHARLES D. SHAPIRO",
+                    "owner_reassessability_type_name": "Exempt",
+                    "owner_assessee_vesting_type_name": "Husband and Wife as Joint Tenants",
+                    "owner_base_effective_date": "2025-09-09",
+                    "owner_base_year": 2025,
+                    "owner_date_acquired": "2025-09-09"
+                  },
+                  "setNumber": 1,
+                  "originalGrantingDocumentNumber": 2025000065659,
+                  "principal": true,
+                  "firstName": "Charles",
+                  "percentage": 50,
+                  "addressLine1": "516 TIMBERWOOD AVENUE",
+                  "id": 1
+                },
+                {
+                  "sourceId": "2025000065659",
+                  "zipCode": 91360,
+                  "lastName": "Shapiro",
+                  "titleType": "Husband and Wife as Joint Tenants",
+                  "sequenceNumber": 2,
+                  "city": "Thousand Oaks",
+                  "customFields": {
+                    "owner_full_name": "SUZANNE D. SHAPIRO",
+                    "owner_reassessability_type_name": "Exempt",
+                    "owner_assessee_vesting_type_name": "Husband and Wife as Joint Tenants",
+                    "owner_base_effective_date": "2025-09-09",
+                    "owner_base_year": 2025,
+                    "owner_date_acquired": "2025-09-09"
+                  },
+                  "setNumber": 1,
+                  "originalGrantingDocumentNumber": 2025000065659,
+                  "principal": false,
+                  "firstName": "Suzanne",
+                  "percentage": 50,
+                  "addressLine1": "516 TIMBERWOOD AVENUE",
+                  "id": 2
+                }
+              ],
+              "legalDescription": "LOT 9 OF TRACT NO. 4305, IN THE CITY OF THOUSAND OAKS, COUNTY OF VENTURA, STATE OF CALIFORNIA, AS PER MAP RECORDED IN BOOK 115, PAGE(S) 3 THROUGH 6 OF MAPS IN THE OFFICE OF THE COUNTY RECORDER OF SAID COUNTY.",
+              "propertyCity": "Thousand Oaks",
+              "matchScore": 100,
+              "parcelNumber": 5510151585,
+              "newOwners": [],
+              "ownerTypes": [
+                null
+              ],
+              "id": 1
+            }
+          ],
+          "potentialMatchParcels": []
+        },
+        "sale_instrument": "Grant Deed",
+        "process_owners_from_parcel_match_cards_component_flag": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,86 @@
+﻿using Amazon;
+using Amazon.S3;
+using Amazon.S3.Model;
+using System;
+using System.IO;
+using System.Threading.Tasks;
+
+namespace TextractUploader
+{
+    class Program
+    {
+        // --- CONFIGURATION ---
+        // TODO: Replace with your S3 bucket name. This bucket should be configured to trigger the TextractProcessor Lambda.
+        private const string BucketName = "testbucket-sudhir-bsi1";
+
+        private const string UploadFolder = "uploads";
+        // TODO: Replace with the full path to the .tif file you want to upload.
+        private static readonly string[] FilesToUpload = new[]
+        {
+            "2025000065659.tif",
+            "2025000065659-1.tif"
+        };
+
+        // TODO: Replace with the AWS region of your S3 bucket.
+        private static readonly RegionEndpoint BucketRegion = RegionEndpoint.USWest2;
+
+        private static IAmazonS3 _s3Client;
+
+        static async Task Main(string[] args)
+        {
+            // Ensure you have configured your AWS credentials correctly.
+            // This can be done via the AWS Toolkit for Visual Studio, environment variables, or an EC2 instance profile.
+            _s3Client = new AmazonS3Client(BucketRegion);
+
+            foreach (var fileName in FilesToUpload)
+            {
+                // Check if file exists locally
+                var filePath = Path.Combine(Directory.GetCurrentDirectory(), fileName);
+                if (!File.Exists(filePath))
+                {
+                    Console.WriteLine($"Error: File {fileName} not found in {Directory.GetCurrentDirectory()}");
+                    continue;
+                }
+
+                // Create the upload request
+                var key = $"{UploadFolder}/{fileName}";
+                var request = new PutObjectRequest
+                {
+                    BucketName = BucketName,
+                    Key = key,
+                    FilePath = filePath,
+                    ContentType = "image/tiff" // Or "image/jpeg" for JPG files
+                };
+
+                try
+                {
+                    Console.WriteLine($"Uploading {fileName} to {BucketName}/{key}...");
+                    var response = await _s3Client.PutObjectAsync(request);
+
+                    if (response.HttpStatusCode == System.Net.HttpStatusCode.OK)
+                    {
+                        Console.WriteLine($"Successfully uploaded {fileName}");
+                        Console.WriteLine($"S3 Object URL: s3://{BucketName}/{key}");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Error uploading {fileName}: {response.HttpStatusCode}");
+                    }
+                }
+                catch (AmazonS3Exception e)
+                {
+                    Console.WriteLine($"S3 Error: {e.Message}");
+                    Console.WriteLine($"Error Code: {e.ErrorCode}");
+                    Console.WriteLine($"Request ID: {e.RequestId}");
+                }
+                catch (Exception e)
+                {
+                    Console.WriteLine($"General Error: {e.Message}");
+                }
+            }
+
+            Console.WriteLine("Press any key to exit.");
+            Console.ReadKey();
+        }
+    }
+}

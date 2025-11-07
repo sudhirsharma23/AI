@@ -1,0 +1,119 @@
+﻿using Amazon.BedrockRuntime;
+using Amazon.BedrockRuntime.Model;
+using System.Text.Json;
+using System.Text;
+using Microsoft.Extensions.Caching.Memory;
+using System.Security.Cryptography;
+
+namespace TextractProcessor.Services
+{
+    public class BedrockService
+    {
+        private readonly IAmazonBedrockRuntime _bedrockClient;
+        private readonly IMemoryCache _cache;
+        private const string MODEL_ID = "anthropic.claude-v2"; // You can change this to other models
+        private const int CACHE_DURATION_MINUTES = 60;
+
+        public BedrockService(IAmazonBedrockRuntime bedrockClient, IMemoryCache cache)
+    {
+      _bedrockClient = bedrockClient;
+            _cache = cache;
+    }
+
+    private string CalculateHash(string input)
+        {
+      using (var sha256 = SHA256.Create())
+         {
+   var bytes = Encoding.UTF8.GetBytes(input);
+      var hash = sha256.ComputeHash(bytes);
+         return Convert.ToBase64String(hash);
+  }
+        }
+
+        public async Task<(string response, int inputTokens, int outputTokens)> ProcessTextractResults(
+     TextractResponse textractResults,
+            string targetSchema)
+   {
+    var prompt = CreatePrompt(textractResults, targetSchema);
+      var promptHash = CalculateHash(prompt);
+
+         // Try to get from cache first
+            if (_cache.TryGetValue<CachedResponse>(promptHash, out var cachedResponse))
+ {
+   return (cachedResponse.Response, cachedResponse.InputTokens, cachedResponse.OutputTokens);
+         }
+
+            var request = new InvokeModelRequest
+  {
+                ModelId = MODEL_ID,
+          ContentType = "application/json",
+           Accept = "application/json",
+                Body = new MemoryStream(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
+       {
+             prompt = $"Human: {prompt}\n\nAssistant: I'll help you transform the Textract results into the target schema format.",
+     max_tokens_to_sample = 8000,
+    temperature = 0.5,
+            top_p = 0.9,
+       })))
+            };
+
+   var response = await _bedrockClient.InvokeModelAsync(request);
+ 
+            using var reader = new StreamReader(response.Body);
+      var responseJson = await reader.ReadToEndAsync();
+      var responseObj = JsonSerializer.Deserialize<BedrockResponse>(responseJson);
+
+            // Estimate tokens (this is a rough estimation, you might want to use a proper tokenizer)
+       var inputTokens = EstimateTokenCount(prompt);
+   var outputTokens = EstimateTokenCount(responseObj.Completion);
+
+            // Cache the response
+            _cache.Set(promptHash, new CachedResponse
+  {
+        Response = responseObj.Completion,
+          InputTokens = inputTokens,
+      OutputTokens = outputTokens
+            }, TimeSpan.FromMinutes(CACHE_DURATION_MINUTES));
+
+            return (responseObj.Completion, inputTokens, outputTokens);
+        }
+
+ private string CreatePrompt(TextractResponse textractResults, string targetSchema)
+        {
+            return $@"
+Transform the following Textract extracted data into the specified target schema.
+
+Textract Results:
+{JsonSerializer.Serialize(textractResults, new JsonSerializerOptions { WriteIndented = true })}
+
+Target Schema:
+{targetSchema}
+
+Generate a JSON object that follows the target schema structure, filling in the appropriate values from the Textract results.
+Only include fields where you have high confidence in the mapping. For numeric values, ensure they are properly formatted.
+For dates, use the format specified in the schema.";
+        }
+
+    private int EstimateTokenCount(string text)
+        {
+    // Rough estimation: average English word is 4.7 characters
+            // GPT tokens are roughly 4 characters
+            return (int)(text.Length / 4);
+        }
+    }
+
+    public class BedrockResponse
+    {
+     public string Completion { get; set; }
+   public string StopReason { get; set; }
+        public int TokensUsed { get; set; }
+    }
+
+    public class CachedResponse
+    {
+        public string Response { get; set; }
+   public int InputTokens { get; set; }
+        public int OutputTokens { get; set; }
+        public DateTime CachedAt { get; set; } = DateTime.UtcNow;
+    }
+}

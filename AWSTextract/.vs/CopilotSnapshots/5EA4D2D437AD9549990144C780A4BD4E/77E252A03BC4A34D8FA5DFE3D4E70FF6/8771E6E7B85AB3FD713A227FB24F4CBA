@@ -1,0 +1,68 @@
+﻿using System.Text.Json;
+using TextractProcessor.Models;
+
+namespace TextractProcessor.Services
+{
+    public class TextractCacheService
+    {
+        private readonly string _cacheDirectory;
+        private const string CACHE_FILE_NAME = "textract_cache.json";
+
+        public TextractCacheService(string outputDirectory)
+        {
+            _cacheDirectory = outputDirectory;
+            Directory.CreateDirectory(_cacheDirectory);
+        }
+
+        public async Task CacheTextractResponse(string documentKey, TextractResponse response)
+        {
+            var cacheFile = Path.Combine(_cacheDirectory, CACHE_FILE_NAME);
+            Dictionary<string, TextractResponse> cache;
+
+            try
+            {
+                if (File.Exists(cacheFile))
+                {
+                    var existingJson = await File.ReadAllTextAsync(cacheFile);
+                    cache = JsonSerializer.Deserialize<Dictionary<string, TextractResponse>>(existingJson)
+                         ?? new Dictionary<string, TextractResponse>();
+                }
+                else
+                {
+                    cache = new Dictionary<string, TextractResponse>();
+                }
+
+                // Update or add the new response
+                cache[documentKey] = response;
+
+                // Save back to file
+                var jsonOptions = new JsonSerializerOptions { WriteIndented = true };
+                await File.WriteAllTextAsync(cacheFile, JsonSerializer.Serialize(cache, jsonOptions));
+            }
+            catch (Exception ex)
+            {
+                // Log but don't throw - caching failure shouldn't stop processing
+                Console.WriteLine($"Warning: Failed to cache Textract response: {ex.Message}");
+            }
+        }
+
+        public async Task<TextractResponse?> GetCachedResponse(string documentKey)
+        {
+            var cacheFile = Path.Combine(_cacheDirectory, CACHE_FILE_NAME);
+
+            if (!File.Exists(cacheFile))
+                return null;
+
+            try
+            {
+                var json = await File.ReadAllTextAsync(cacheFile);
+                var cache = JsonSerializer.Deserialize<Dictionary<string, TextractResponse>>(json);
+                return cache?.TryGetValue(documentKey, out var response) == true ? response : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+    }
+}

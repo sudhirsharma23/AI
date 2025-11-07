@@ -1,0 +1,99 @@
+﻿using Amazon.Lambda.Core;
+using Amazon.Lambda.S3Events;
+using Amazon.S3;
+using Amazon.Textract;
+using Amazon.Textract.Model;
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+
+// Assembly attribute to enable the Lambda function's JSON input to be converted into a .NET class.
+[assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]
+
+namespace TextractProcessor
+{
+    public class Function
+    {
+        private readonly IAmazonS3 _s3Client;
+        private readonly IAmazonTextract _textractClient;
+
+        // --- CONFIGURATION ---
+        // TODO: Replace with the ARN of the IAM Role that grants Textract access to publish to your SNS topic.
+        private const string TextractRoleArn = "arn:aws:iam::912532823432:role/accesstextract-role";
+
+        // TODO: Replace with the ARN of the SNS topic to which Textract will publish job completion notifications.
+        private const string SnsTopicArn = "arn:aws:sns:us-east-1:912532823432:sns-topic-textract.fifo";
+
+        /// <summary>
+        /// Default constructor. This constructor is used by Lambda to construct the instance. When invoked in a Lambda environment
+        /// the AWS credentials will come from the IAM role associated with the function and the AWS region will be set to the
+        /// region the Lambda function is executed in.
+        /// </summary>
+        public Function()
+        {
+            _s3Client = new AmazonS3Client();
+            _textractClient = new AmazonTextractClient();
+        }
+
+        /// <summary>
+        /// This method is called for every Lambda invocation. It takes in an S3 event object and can be used 
+        /// to respond to S3 notifications.
+        /// </summary>
+        /// <param name="evnt"></param>
+        /// <param name="context"></param>
+        /// <returns></returns>
+        public async Task<string> FunctionHandler(S3Event evnt, ILambdaContext context)
+        {
+            var s3Event = evnt.Records?[0].S3;
+            if (s3Event == null)
+            {
+                context.Logger.LogInformation("Received S3 event with no records.");
+                return null;
+            }
+
+            // Ignore events from sub-folders to prevent infinite loops if results are written to the same bucket.
+            if (!s3Event.Object.Key.StartsWith("uploads/"))
+            {
+                context.Logger.LogInformation($"Ignoring file {s3Event.Object.Key} as it is not in the 'uploads/' folder.");
+                return null;
+            }
+
+            try
+            {
+                context.Logger.LogInformation($"Processing file: {s3Event.Object.Key} from bucket: {s3Event.Bucket.Name}");
+
+                var startRequest = new StartDocumentAnalysisRequest
+                {
+                    DocumentLocation = new DocumentLocation
+                    {
+                        S3Object = new S3Object
+                        {
+                            Bucket = s3Event.Bucket.Name,
+                            Name = s3Event.Object.Key
+                        }
+                    },
+                    // Specify the features you want to extract
+                    FeatureTypes = new List<string> { "TABLES", "FORMS" },
+                    NotificationChannel = new NotificationChannel
+                    {
+                        RoleArn = TextractRoleArn,
+                        SNSTopicArn = SnsTopicArn
+                    }
+                };
+
+                var startResponse = await _textractClient.StartDocumentAnalysisAsync(startRequest);
+
+                context.Logger.LogInformation($"Started Textract analysis job with ID: {startResponse.JobId}");
+
+                return startResponse.JobId;
+            }
+            catch (Exception e)
+            {
+                context.Logger.LogError($"Error processing file: {s3Event.Object.Key}. Error: {e.Message}");
+                // Rethrowing the exception will result in the Lambda invocation failing.
+                // Configure a Dead-Letter Queue (DLQ) on the Lambda function to handle failed invocations.
+                throw;
+            }
+        }
+    }
+}

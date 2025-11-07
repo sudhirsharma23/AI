@@ -1,0 +1,213 @@
+﻿using Amazon.BedrockRuntime;
+using Amazon.BedrockRuntime.Model;
+using Microsoft.Extensions.Caching.Memory;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using TextractProcessor.Models;
+using Amazon.Lambda.Core;
+
+namespace TextractProcessor.Services
+{
+    /// <summary>
+    /// Service for processing Textract results through Amazon Bedrock's language models
+    /// </summary>
+    public class BedrockService
+    {
+        private readonly IAmazonBedrockRuntime _bedrockClient;
+        private readonly IMemoryCache _cache;
+
+        // Changed to use Titan as it's often enabled by default
+        private const string MODEL_ID = "amazon.titan-text-express-v1";
+        private const int CACHE_DURATION_MINUTES = 60;
+        private const int MAX_TOKENS = 4000;  // Titan has a lower token limit
+        private const float TEMPERATURE = 0.7f;
+        private const float TOP_P = 1.0f;
+
+        public BedrockService(IAmazonBedrockRuntime bedrockClient, IMemoryCache cache)
+        {
+            _bedrockClient = bedrockClient ?? throw new ArgumentNullException(nameof(bedrockClient));
+            _cache = cache ?? throw new ArgumentNullException(nameof(cache));
+        }
+
+        /// <summary>
+        /// Processes Textract results and maps them to the target schema using Bedrock's AI model
+        /// </summary>
+        /// <param name="textractResults">The results from Textract processing</param>
+        /// <param name="targetSchema">The target schema to map the results to</param>
+        /// <returns>Tuple containing the response, input token count, and output token count</returns>
+        public async Task<(string response, int inputTokens, int outputTokens)> ProcessTextractResults(
+            TextractResponse textractResults,
+            string targetSchema,
+            ILambdaContext context = null)
+        {
+            try
+            {
+                if (textractResults == null) throw new ArgumentNullException(nameof(textractResults));
+                if (string.IsNullOrWhiteSpace(targetSchema)) throw new ArgumentException("Target schema cannot be empty", nameof(targetSchema));
+
+                context?.Logger.LogLine("Creating prompt and checking cache...");
+                var prompt = CreatePrompt(textractResults, targetSchema);
+                var promptHash = CalculateHash(prompt);
+
+                // Try to get from cache
+                if (_cache.TryGetValue<CachedResponse>(promptHash, out var cachedResponse))
+                {
+                    context?.Logger.LogLine("Cache hit - returning cached response");
+                    return (cachedResponse.Response, cachedResponse.InputTokens, cachedResponse.OutputTokens);
+                }
+
+                context?.Logger.LogLine($"Invoking Bedrock model {MODEL_ID}...");
+
+                // Titan specific request format
+                var requestBody = new
+                {
+                    inputText = prompt,
+                    textGenerationConfig = new
+                    {
+                        maxTokenCount = MAX_TOKENS,
+                        temperature = TEMPERATURE,
+                        topP = TOP_P,
+                        stopSequences = new[] { "\n\nHuman:" }
+                    }
+                };
+
+                var requestJson = JsonSerializer.Serialize(requestBody, new JsonSerializerOptions
+                {
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+                });
+                context?.Logger.LogLine($"Request body: {requestJson}");
+
+                var request = new InvokeModelRequest
+                {
+                    ModelId = MODEL_ID,
+                    ContentType = "application/json",
+                    Accept = "application/json",
+                    Body = new MemoryStream(Encoding.UTF8.GetBytes(requestJson))
+                };
+
+                context?.Logger.LogLine("Sending request to Bedrock...");
+                var response = await _bedrockClient.InvokeModelAsync(request);
+
+                context?.Logger.LogLine("Reading response from Bedrock...");
+                using var reader = new StreamReader(response.Body);
+                var responseJson = await reader.ReadToEndAsync();
+                context?.Logger.LogLine($"Raw response: {responseJson}");
+
+                var titanResponse = JsonSerializer.Deserialize<TitanResponse>(responseJson);
+                if (titanResponse?.Results == null || !titanResponse.Results.Any())
+                {
+                    throw new InvalidOperationException($"Invalid Bedrock response: {responseJson}");
+                }
+
+                var outputText = titanResponse.Results[0].OutputText ?? string.Empty;
+                var inputTokens = EstimateTokenCount(prompt);
+                var outputTokens = EstimateTokenCount(outputText);
+
+                context?.Logger.LogLine($"Response received. Input tokens: {inputTokens}, Output tokens: {outputTokens}");
+
+                var cacheEntry = new CachedResponse
+                {
+                    Response = outputText,
+                    InputTokens = inputTokens,
+                    OutputTokens = outputTokens
+                };
+
+                _cache.Set(promptHash, cacheEntry, TimeSpan.FromMinutes(CACHE_DURATION_MINUTES));
+
+                return (outputText, inputTokens, outputTokens);
+            }
+            catch (AmazonBedrockRuntimeException e)
+            {
+                context?.Logger.LogLine($"Bedrock API Error: {e.Message}");
+                context?.Logger.LogLine($"Error Type: {e.ErrorType}, Error Code: {e.ErrorCode}");
+                throw new ApplicationException($"Bedrock service error: {e.Message}", e);
+            }
+            catch (Exception e)
+            {
+                context?.Logger.LogLine($"Unexpected error in Bedrock service: {e.Message}");
+                context?.Logger.LogLine($"Stack trace: {e.StackTrace}");
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Creates the prompt for the AI model
+        /// </summary>
+        private static string CreatePrompt(TextractResponse textractResults, string targetSchema)
+        {
+            return $@"Convert the following extracted text data into a JSON object that matches the specified schema. 
+Please ensure strict adherence to the target schema format.
+
+Source Data:
+{JsonSerializer.Serialize(textractResults, new JsonSerializerOptions { WriteIndented = true })}
+
+Target Schema:
+{targetSchema}
+
+Instructions:
+1. Map the source data to the target schema format
+2. Maintain correct data types as specified in the schema
+3. Use null for any required fields that cannot be confidently mapped
+4. Format dates as YYYY-MM-DD where specified
+5. Return only the valid JSON object matching the target schema
+
+Response Format:
+Provide only the JSON object without any additional text or explanation.";
+        }
+
+        /// <summary>
+        /// Creates a hash of the input string for caching purposes
+        /// </summary>
+        private static string CalculateHash(string input)
+        {
+            using var sha256 = SHA256.Create();
+            var bytes = Encoding.UTF8.GetBytes(input);
+            var hash = sha256.ComputeHash(bytes);
+            return Convert.ToBase64String(hash);
+        }
+
+        /// <summary>
+        /// Estimates the token count for a given text
+        /// </summary>
+        private static int EstimateTokenCount(string text)
+        {
+            // Rough estimation: GPT tokens are roughly 4 characters
+            return (int)(text.Length / 4);
+        }
+    }
+
+    // Updated response class for Titan model
+    public class TitanResponse
+    {
+        [JsonPropertyName("results")]
+        public List<TitanResult> Results { get; set; } = new();
+    }
+
+    public class TitanResult
+    {
+        [JsonPropertyName("outputText")]
+        public string OutputText { get; set; } = string.Empty;
+
+        [JsonPropertyName("completionReason")]
+        public string CompletionReason { get; set; } = string.Empty;
+
+        [JsonPropertyName("inputTextTokenCount")]
+        public int InputTextTokenCount { get; set; }
+
+        [JsonPropertyName("outputTextTokenCount")]
+        public int OutputTextTokenCount { get; set; }
+    }
+
+    /// <summary>
+    /// Represents a cached response from the model
+    /// </summary>
+    public class CachedResponse
+    {
+        public string Response { get; set; } = string.Empty;
+        public int InputTokens { get; set; }
+        public int OutputTokens { get; set; }
+        public DateTime CachedAt { get; set; } = DateTime.UtcNow;
+    }
+}

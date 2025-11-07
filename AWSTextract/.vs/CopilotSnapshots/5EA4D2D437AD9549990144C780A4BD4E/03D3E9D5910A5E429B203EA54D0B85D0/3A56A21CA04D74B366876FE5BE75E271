@@ -1,0 +1,194 @@
+﻿using Amazon.BedrockRuntime;
+using Amazon.BedrockRuntime.Model;
+using Microsoft.Extensions.Caching.Memory;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using TextractProcessor.Models;
+using Amazon.Lambda.Core;
+
+namespace TextractProcessor.Services
+{
+    /// <summary>
+    /// Service for processing Textract results through Amazon Bedrock's language models
+    /// </summary>
+    public class BedrockService
+    {
+        private readonly IAmazonBedrockRuntime _bedrockClient;
+        private readonly IMemoryCache _cache;
+
+        private const string MODEL_ID = "anthropic.claude-v2";
+        private const int CACHE_DURATION_MINUTES = 60;
+        private const int MAX_TOKENS = 8000;
+        private const float TEMPERATURE = 0.5f;
+        private const float TOP_P = 0.9f;
+
+        public BedrockService(IAmazonBedrockRuntime bedrockClient, IMemoryCache cache)
+        {
+            _bedrockClient = bedrockClient ?? throw new ArgumentNullException(nameof(bedrockClient));
+            _cache = cache ?? throw new ArgumentNullException(nameof(cache));
+        }
+
+        /// <summary>
+        /// Processes Textract results and maps them to the target schema using Bedrock's AI model
+        /// </summary>
+        /// <param name="textractResults">The results from Textract processing</param>
+        /// <param name="targetSchema">The target schema to map the results to</param>
+        /// <returns>Tuple containing the response, input token count, and output token count</returns>
+        public async Task<(string response, int inputTokens, int outputTokens)> ProcessTextractResults(
+            TextractResponse textractResults,
+            string targetSchema,
+      ILambdaContext context = null)
+        {
+            try
+            {
+                if (textractResults == null) throw new ArgumentNullException(nameof(textractResults));
+                if (string.IsNullOrWhiteSpace(targetSchema)) throw new ArgumentException("Target schema cannot be empty", nameof(targetSchema));
+
+                context?.LogInformation("Creating prompt and checking cache...");
+                var prompt = CreatePrompt(textractResults, targetSchema);
+                var promptHash = CalculateHash(prompt);
+
+                // Try to get from cache
+                if (_cache.TryGetValue<CachedResponse>(promptHash, out var cachedResponse))
+                {
+                    context?.LogInformation("Cache hit - returning cached response");
+                    return (cachedResponse.Response, cachedResponse.InputTokens, cachedResponse.OutputTokens);
+                }
+
+                context?.LogInformation($"Invoking Bedrock model {MODEL_ID}...");
+                var requestBody = new
+                {
+                    prompt = $"Human: {prompt}\n\nAssistant: I'll help you transform the Textract results into the target schema format.",
+                    max_tokens_to_sample = MAX_TOKENS,
+                    temperature = TEMPERATURE,
+                    top_p = TOP_P,
+                    stop_sequences = new[] { "\n\nHuman:" },
+                    anthropic_version = "bedrock-2023-05-31"
+                };
+
+                var requestJson = JsonSerializer.Serialize(requestBody);
+                context?.LogInformation($"Request body: {requestJson}");
+
+                var request = new InvokeModelRequest
+                {
+                    ModelId = MODEL_ID,
+                    ContentType = "application/json",
+                    Accept = "application/json",
+                    Body = new MemoryStream(Encoding.UTF8.GetBytes(requestJson))
+                };
+
+                context?.LogInformation("Sending request to Bedrock...");
+                var response = await _bedrockClient.InvokeModelAsync(request);
+
+                context?.LogInformation("Reading response from Bedrock...");
+                using var reader = new StreamReader(response.Body);
+                var responseJson = await reader.ReadToEndAsync();
+                context?.LogInformation($"Raw response: {responseJson}");
+
+                var responseObj = JsonSerializer.Deserialize<BedrockResponse>(responseJson);
+                if (responseObj == null)
+                {
+                    throw new InvalidOperationException("Failed to deserialize Bedrock response");
+                }
+
+                var inputTokens = EstimateTokenCount(prompt);
+                var outputTokens = EstimateTokenCount(responseObj.Completion);
+
+                context?.LogInformation($"Response received. Input tokens: {inputTokens}, Output tokens: {outputTokens}");
+
+                var cacheEntry = new CachedResponse
+                {
+                    Response = responseObj.Completion,
+                    InputTokens = inputTokens,
+                    OutputTokens = outputTokens
+                };
+
+                _cache.Set(promptHash, cacheEntry, TimeSpan.FromMinutes(CACHE_DURATION_MINUTES));
+
+                return (responseObj.Completion, inputTokens, outputTokens);
+            }
+            catch (AmazonBedrockRuntimeException e)
+            {
+                context?.LogError($"Bedrock API Error: {e.Message}");
+                context?.LogError($"Error Type: {e.ErrorType}, Error Code: {e.ErrorCode}");
+                throw new ApplicationException($"Bedrock service error: {e.Message}", e);
+            }
+            catch (Exception e)
+            {
+                context?.LogError($"Unexpected error in Bedrock service: {e.Message}");
+                context?.LogError($"Stack trace: {e.StackTrace}");
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Creates the prompt for the AI model
+        /// </summary>
+        private static string CreatePrompt(TextractResponse textractResults, string targetSchema)
+        {
+            return $@"
+You are an expert in data mapping and JSON transformation. Your task is to map the Textract extraction results to a specific target schema.
+
+Source Data (Textract Results):
+{JsonSerializer.Serialize(textractResults, new JsonSerializerOptions { WriteIndented = true })}
+
+Target Schema:
+{targetSchema}
+
+Requirements:
+1. Generate a JSON object that exactly matches the target schema structure
+2. Map values from the Textract results to their corresponding fields in the target schema
+3. Only include fields where there is high confidence in the mapping
+4. Ensure proper data type conversion:
+   - For 'number' fields, ensure values are numeric
+   - For 'string' fields, provide cleaned text
+   - For 'boolean' fields, use true/false
+   - For dates, use the format specified (YYYY-MM-DD)
+5. If a required field cannot be confidently mapped, use null or an appropriate default value
+
+Provide the output as a valid JSON object that matches the target schema exactly.";
+        }
+
+        /// <summary>
+        /// Creates a hash of the input string for caching purposes
+        /// </summary>
+        private static string CalculateHash(string input)
+        {
+            using var sha256 = SHA256.Create();
+            var bytes = Encoding.UTF8.GetBytes(input);
+            var hash = sha256.ComputeHash(bytes);
+            return Convert.ToBase64String(hash);
+        }
+
+        /// <summary>
+        /// Estimates the token count for a given text
+        /// </summary>
+        private static int EstimateTokenCount(string text)
+        {
+            // Rough estimation: GPT tokens are roughly 4 characters
+            return (int)(text.Length / 4);
+        }
+    }
+
+    /// <summary>
+    /// Represents a response from the Bedrock model
+    /// </summary>
+    public class BedrockResponse
+    {
+        public string Completion { get; set; } = string.Empty;
+        public string StopReason { get; set; } = string.Empty;
+        public int TokensUsed { get; set; }
+    }
+
+    /// <summary>
+    /// Represents a cached response from the model
+    /// </summary>
+    public class CachedResponse
+    {
+        public string Response { get; set; } = string.Empty;
+        public int InputTokens { get; set; }
+        public int OutputTokens { get; set; }
+        public DateTime CachedAt { get; set; } = DateTime.UtcNow;
+    }
+}

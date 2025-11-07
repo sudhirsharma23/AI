@@ -1,0 +1,429 @@
+﻿using Amazon.Lambda.Core;
+using Amazon.S3;
+using Amazon.Textract;
+using Amazon.BedrockRuntime;
+using Amazon.Textract.Model;
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using System.Text.Json;
+using System.Linq;
+using System.IO;
+using System.Text;
+using Microsoft.Extensions.Caching.Memory;
+using TextractProcessor.Services;
+using TextractProcessor.Models;
+
+[assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]
+
+namespace TextractProcessor
+{
+    public class Function
+    {
+        private readonly IAmazonS3 _s3Client;
+        private readonly IAmazonTextract _textractClient;
+        private readonly SchemaMapperService _schemaMapper;
+        private readonly IMemoryCache _cache;
+        
+        // --- CONFIGURATION ---
+private const string BucketName = "testbucket-sudhir-bsi1";
+        private const string TextractRoleArn = "arn:aws:iam::912532823432:role/accesstextract-role";
+        private const string SnsTopicArn = "arn:aws:sns:us-east-1:912532823432:sns-topic-textract.fifo";
+        private const string DocumentKey = "uploads/2025000065659.tif";
+        private const string SchemaPath = "invoice_schema.json";
+        private const int MaxRetries = 60;
+        private const int RetryInterval = 5000;
+     private const string OutputDirectory = "TextractResults";
+
+  public Function()
+        {
+       _s3Client = new AmazonS3Client();
+   _textractClient = new AmazonTextractClient();
+            _cache = new MemoryCache(new MemoryCacheOptions());
+    
+        var bedrockClient = new AmazonBedrockRuntimeClient();
+       var bedrockService = new BedrockService(bedrockClient, _cache);
+            _schemaMapper = new SchemaMapperService(bedrockService, _cache, OutputDirectory);
+ 
+   Directory.CreateDirectory(OutputDirectory);
+  }
+
+        private float GetFloatValue(float? nullableValue)
+        {
+return nullableValue ?? 0f;
+        }
+
+        public async Task<ProcessingResult> FunctionHandler(ILambdaContext context)
+     {
+    try
+  {
+ var textractResponse = await ProcessTextract(context);
+   var schemaResult = await _schemaMapper.ProcessAndMapSchema(
+          textractResponse,
+    SchemaPath,
+     DocumentKey
+     );
+
+     context.Logger.LogInformation($"Processing completed:");
+      context.Logger.LogInformation($"- Input tokens: {schemaResult.InputTokens}");
+     context.Logger.LogInformation($"- Output tokens: {schemaResult.OutputTokens}");
+     context.Logger.LogInformation($"- Estimated cost: ${schemaResult.TotalCost:F4}");
+             context.Logger.LogInformation($"- Mapped file saved to: {schemaResult.MappedFilePath}");
+
+                return schemaResult;
+     }
+   catch (Exception e)
+            {
+       context.Logger.LogError($"Error: {e.Message}");
+ return new ProcessingResult
+                {
+  Success = false,
+          Error = e.Message
+          };
+   }
+  }
+
+        private async Task<TextractResponse> ProcessTextract(ILambdaContext context)
+        {
+            try
+            {
+                context.Logger.LogInformation($"Processing file: {DocumentKey} from bucket: {BucketName}");
+
+                var startRequest = new StartDocumentAnalysisRequest
+                {
+                    DocumentLocation = new DocumentLocation
+                    {
+                        S3Object = new S3Object
+                        {
+                            Bucket = BucketName,
+                            Name = DocumentKey
+                        }
+                    },
+                    FeatureTypes = new List<string> { "TABLES", "FORMS", "LAYOUT" },
+                    NotificationChannel = new NotificationChannel
+                    {
+                        RoleArn = TextractRoleArn,
+                        SNSTopicArn = SnsTopicArn
+                    }
+                };
+
+                var startResponse = await _textractClient.StartDocumentAnalysisAsync(startRequest);
+                var jobId = startResponse.JobId;
+                context.Logger.LogInformation($"Started Textract analysis job with ID: {jobId}");
+
+                // Wait for the job to complete
+                var result = await WaitForJobCompletion(jobId, context);
+                if (result == null)
+                {
+                    return new TextractResponse { JobId = jobId, JobStatus = "FAILED" };
+                }
+
+                // Process the results
+                var response = new TextractResponse
+                {
+                    JobId = jobId,
+                    JobStatus = result.JobStatus,
+                    FormData = new List<Dictionary<string, string>>(),
+                    TableData = new List<Dictionary<string, object>>(),
+                    Pages = new List<PageInfo>(),
+                    RawText = string.Empty
+                };
+
+                var rawTextBuilder = new StringBuilder();
+                var currentPage = new PageInfo
+                {
+                    PageNumber = 1,
+                    Lines = new List<LineInfo>(),
+                    Words = new List<WordInfo>(),
+                    Dimensions = new Dictionary<string, float>()
+                };
+
+                // Get all results (handling pagination)
+                string nextToken = null;
+                do
+                {
+                    var getResultsRequest = new GetDocumentAnalysisRequest
+                    {
+                        JobId = jobId,
+                        NextToken = nextToken
+                    };
+
+                    var analysisResult = await _textractClient.GetDocumentAnalysisAsync(getResultsRequest);
+                    nextToken = analysisResult.NextToken;
+
+                    // Process form fields
+                    foreach (var block in analysisResult.Blocks)
+                    {
+                        if (block.BlockType == "KEY_VALUE_SET" && block.EntityTypes.Contains("KEY"))
+                        {
+                            var keyValuePair = ExtractKeyValuePair(block, analysisResult.Blocks);
+                            if (keyValuePair != null)
+                            {
+                                response.FormData.Add(keyValuePair);
+                            }
+                        }
+                        else if (block.BlockType == "PAGE")
+                        {
+                            if (currentPage.Lines.Any())
+                            {
+                                response.Pages.Add(currentPage);
+                            }
+                            currentPage = new PageInfo
+                            {
+                                PageNumber = block.Page ?? 1,
+                                Lines = new List<LineInfo>(),
+                                Words = new List<WordInfo>(),
+                                Dimensions = new Dictionary<string, float>
+                                {
+                                    { "Width", GetFloatValue(block.Geometry?.BoundingBox?.Width) },
+                                    { "Height", GetFloatValue(block.Geometry?.BoundingBox?.Height) }
+                                }
+                            };
+                        }
+                        else if (block.BlockType == "LINE")
+                        {
+                            var lineInfo = new LineInfo
+                            {
+                                Text = block.Text,
+                                Confidence = block.Confidence ?? 0,
+                                Geometry = new Dictionary<string, float>
+                                {
+                                    { "Left", GetFloatValue(block.Geometry?.BoundingBox?.Left) },
+                                    { "Top", GetFloatValue(block.Geometry?.BoundingBox?.Top) },
+                                    { "Width", GetFloatValue(block.Geometry?.BoundingBox?.Width) },
+                                    { "Height", GetFloatValue(block.Geometry?.BoundingBox?.Height) }
+                                }
+                            };
+                            currentPage.Lines.Add(lineInfo);
+                            rawTextBuilder.AppendLine(block.Text);
+                        }
+                        else if (block.BlockType == "WORD")
+                        {
+                            var wordInfo = new WordInfo
+                            {
+                                Text = block.Text,
+                                Confidence = block.Confidence ?? 0,
+                                Geometry = new Dictionary<string, float>
+                                {
+                                    { "Left", GetFloatValue(block.Geometry?.BoundingBox?.Left) },
+                                    { "Top", GetFloatValue(block.Geometry?.BoundingBox?.Top) },
+                                    { "Width", GetFloatValue(block.Geometry?.BoundingBox?.Width) },
+                                    { "Height", GetFloatValue(block.Geometry?.BoundingBox?.Height) }
+                                }
+                            };
+                            currentPage.Words.Add(wordInfo);
+                        }
+                    }
+
+                    // Process tables
+                    ProcessTables(analysisResult.Blocks, response.TableData);
+
+                } while (nextToken != null);
+
+                if (currentPage.Lines.Any())
+                {
+                    response.Pages.Add(currentPage);
+                }
+
+                response.RawText = rawTextBuilder.ToString();
+
+                // Log and save the results
+                context.Logger.LogInformation($"Analysis completed. Found {response.FormData.Count} form fields, {response.TableData.Count} tables, and {response.Pages.Count} pages.");
+                var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                var baseFileName = Path.GetFileNameWithoutExtension(DocumentKey.Split('/').Last());
+            
+                // Save JSON format
+                var jsonFileName = Path.Combine(OutputDirectory, $"{baseFileName}_{timestamp}.json");
+                var jsonContent = JsonSerializer.Serialize(response, new JsonSerializerOptions { WriteIndented = true });
+                await File.WriteAllTextAsync(jsonFileName, jsonContent);
+                context.Logger.LogInformation($"Saved JSON results to: {jsonFileName}");
+
+                // Save human-readable format
+                var textFileName = Path.Combine(OutputDirectory, $"{baseFileName}_{timestamp}.txt");
+                await SaveEnhancedHumanReadableFormat(response, textFileName);
+                context.Logger.LogInformation($"Saved readable results to: {textFileName}");
+
+                return response;
+            }
+            catch (Exception e)
+            {
+                context.Logger.LogError($"Error processing file {DocumentKey} from bucket {BucketName}: {e.Message}");
+                return new TextractResponse
+                {
+                    JobStatus = "ERROR",
+                    ErrorMessage = e.Message
+                };
+            }
+        }
+
+        private async Task SaveEnhancedHumanReadableFormat(TextractResponse response, string filePath)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine("Textract Analysis Results");
+            sb.AppendLine("=======================");
+            sb.AppendLine($"Document: {DocumentKey}");
+            sb.AppendLine($"Job ID: {response.JobId}");
+            sb.AppendLine($"Status: {response.JobStatus}");
+            sb.AppendLine();
+
+            // Document Statistics
+            sb.AppendLine("Document Statistics");
+            sb.AppendLine("------------------");
+            sb.AppendLine($"Total Pages: {response.Pages.Count}");
+            sb.AppendLine($"Total Lines: {response.Pages.Sum(p => p.Lines.Count)}");
+            sb.AppendLine($"Total Words: {response.Pages.Sum(p => p.Words.Count)}");
+            sb.AppendLine($"Form Fields: {response.FormData.Count}");
+            sb.AppendLine();
+
+            // Raw Text Content
+            sb.AppendLine("Raw Text Content");
+            sb.AppendLine("---------------");
+            sb.AppendLine(response.RawText);
+            sb.AppendLine();
+
+            // Page Details
+            foreach (var page in response.Pages)
+            {
+                sb.AppendLine($"Page {page.PageNumber} Details");
+                sb.AppendLine("--------------------");
+                sb.AppendLine($"Page Dimensions: Width={page.Dimensions["Width"]:F3}, Height={page.Dimensions["Height"]:F3}");
+                sb.AppendLine();
+
+                sb.AppendLine("Lines with Position and Confidence:");
+                foreach (var line in page.Lines.OrderBy(l => l.Geometry["Top"]))
+                {
+                    sb.AppendLine($"[Confidence: {line.Confidence:F1}%] [Position: ({line.Geometry["Left"]:F3}, {line.Geometry["Top"]:F3})] {line.Text}");
+                }
+                sb.AppendLine();
+
+                sb.AppendLine("Words with Details:");
+                foreach (var word in page.Words.OrderBy(w => w.Geometry["Top"]).ThenBy(w => w.Geometry["Left"]))
+                {
+                    sb.AppendLine($"[Confidence: {word.Confidence:F1}%] [Position: ({word.Geometry["Left"]:F3}, {word.Geometry["Top"]:F3})] {word.Text}");
+                }
+                sb.AppendLine();
+            }
+
+            // Form Fields
+            if (response.FormData?.Any() == true)
+            {
+                sb.AppendLine("Form Fields");
+                sb.AppendLine("-----------");
+                foreach (var field in response.FormData)
+                {
+                    foreach (var kvp in field)
+                    {
+                        sb.AppendLine($"{kvp.Key}: {kvp.Value}");
+                    }
+                }
+                sb.AppendLine();
+            }
+
+            if (!string.IsNullOrEmpty(response.ErrorMessage))
+            {
+                sb.AppendLine("Errors");
+                sb.AppendLine("------");
+                sb.AppendLine(response.ErrorMessage);
+            }
+
+            await File.WriteAllTextAsync(filePath, sb.ToString());
+        }
+
+        private async Task<GetDocumentAnalysisResponse> WaitForJobCompletion(string jobId, ILambdaContext context)
+        {
+            for (int i = 0; i < MaxRetries; i++)
+            {
+                var getResultsRequest = new GetDocumentAnalysisRequest { JobId = jobId };
+                var result = await _textractClient.GetDocumentAnalysisAsync(getResultsRequest);
+
+                if (result.JobStatus == "SUCCEEDED")
+                {
+                    return result;
+                }
+                else if (result.JobStatus == "FAILED")
+                {
+                    context.Logger.LogError($"Textract job failed: {result.StatusMessage}");
+                    return null;
+                }
+
+                await Task.Delay(RetryInterval);
+            }
+
+            context.Logger.LogError("Job did not complete within the maximum retry attempts");
+            return null;
+        }
+
+        private Dictionary<string, string> ExtractKeyValuePair(Block keyBlock, List<Block> blocks)
+        {
+            try
+            {
+                var keyText = string.Join(" ", keyBlock.Relationships
+             .FirstOrDefault(r => r.Type == "CHILD")?
+              .Ids
+                  .Select(id => blocks.First(b => b.Id == id).Text) ?? Array.Empty<string>());
+
+                var valueBlock = blocks.FirstOrDefault(b =>
+                        keyBlock.Relationships.Any(r => r.Type == "VALUE" && r.Ids.Contains(b.Id)));
+
+                if (valueBlock != null)
+                {
+                    var valueText = string.Join(" ", valueBlock.Relationships
+                          .FirstOrDefault(r => r.Type == "CHILD")?
+                          .Ids
+                     .Select(id => blocks.First(b => b.Id == id).Text) ?? Array.Empty<string>());
+
+                    return new Dictionary<string, string> { { keyText.Trim(), valueText.Trim() } };
+                }
+            }
+            catch (Exception)
+            {
+                // Skip malformed key-value pairs
+            }
+
+            return null;
+        }
+
+  private void ProcessTables(List<Block> blocks, List<Dictionary<string, object>> tableData)
+        {
+            var tables = blocks.Where(b => b.BlockType == "TABLE");
+
+            foreach (var table in tables)
+            {
+                // Find all cells that belong to this table
+                var tableCells = blocks.Where(b =>
+                                  b.BlockType == "CELL" &&
+                  b.Relationships?.Any(r => r.Type == "CHILD") == true &&
+              b.Id.StartsWith(table.Id)).ToList();
+
+                // Calculate rows and columns from the actual cells
+                var rowCount = tableCells.Max(c => c.RowIndex);
+                var columnCount = tableCells.Max(c => c.ColumnIndex);
+
+                var tableDict = new Dictionary<string, object>
+      {
+  { "TableId", table.Id },
+              { "Rows", rowCount },
+       { "Columns", columnCount },
+          { "Cells", new List<Dictionary<string, string>>() }
+      };
+
+                foreach (var cell in tableCells)
+                {
+                    var cellText = string.Join(" ", cell.Relationships
+                      .FirstOrDefault(r => r.Type == "CHILD")?
+                           .Ids
+                            .Select(id => blocks.First(b => b.Id == id).Text) ?? Array.Empty<string>());
+
+                    ((List<Dictionary<string, string>>)tableDict["Cells"]).Add(new Dictionary<string, string>
+                 {
+            { "RowIndex", cell.RowIndex.ToString() },
+              { "ColumnIndex", cell.ColumnIndex.ToString() },
+    { "Text", cellText.Trim() }
+         });
+                }
+
+                tableData.Add(tableDict);
+            }
+        }
+    }
+}

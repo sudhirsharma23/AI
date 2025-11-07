@@ -1,0 +1,88 @@
+﻿using Amazon.Lambda.Core;
+using Amazon.S3;
+using Amazon.Textract;
+using Amazon.Textract.Model;
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+
+// Assembly attribute to enable the Lambda function's JSON input to be converted into a .NET class.
+[assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]
+
+namespace TextractProcessor
+{
+    public class Function
+    {
+        private readonly IAmazonS3 _s3Client;
+        private readonly IAmazonTextract _textractClient;
+
+        // --- CONFIGURATION ---
+        private const string BucketName = "testbucket-sudhir-bsi1";
+        private const string TextractRoleArn = "arn:aws:iam::912532823432:role/accesstextract-role";
+        private const string SnsTopicArn = "arn:aws:sns:us-east-1:912532823432:sns-topic-textract.fifo";
+
+        /// <summary>
+        /// Default constructor. This constructor is used by Lambda to construct the instance. When invoked in a Lambda environment
+        /// the AWS credentials will come from the IAM role associated with the function and the AWS region will be set to the
+        /// region the Lambda function is executed in.
+        /// </summary>
+        public Function()
+        {
+            _s3Client = new AmazonS3Client();
+            _textractClient = new AmazonTextractClient();
+        }
+
+        /// <summary>
+        /// This method is called for every Lambda invocation. It takes in a document key and can be used 
+        /// to process files directly from the specified bucket.
+        /// </summary>
+        /// <param name="documentKey"></param>
+        /// <param name="context"></param>
+        /// <returns></returns>
+        public async Task<string> FunctionHandler(string documentKey, ILambdaContext context)
+        {
+            if (string.IsNullOrEmpty(documentKey))
+            {
+                context.Logger.LogError("No document key provided");
+                return null;
+            }
+
+            try
+            {
+                context.Logger.LogInformation($"Processing file: {documentKey} from bucket: {BucketName}");
+
+                var startRequest = new StartDocumentAnalysisRequest
+                {
+                    DocumentLocation = new DocumentLocation
+                    {
+                        S3Object = new S3Object
+                        {
+                            Bucket = BucketName,
+                            Name = documentKey
+                        }
+                    },
+                    // Specify the features you want to extract
+                    FeatureTypes = new List<string> { "TABLES", "FORMS" },
+                    NotificationChannel = new NotificationChannel
+                    {
+                        RoleArn = TextractRoleArn,
+                        SNSTopicArn = SnsTopicArn
+                    }
+                };
+
+                var startResponse = await _textractClient.StartDocumentAnalysisAsync(startRequest);
+
+                context.Logger.LogInformation($"Started Textract analysis job with ID: {startResponse.JobId}");
+
+                return startResponse.JobId;
+            }
+            catch (Exception e)
+            {
+                context.Logger.LogError($"Error processing file {documentKey} from bucket {BucketName}: {e.Message}");
+                // Rethrowing the exception will result in the Lambda invocation failing.
+                // Configure a Dead-Letter Queue (DLQ) on the Lambda function to handle failed invocations.
+                throw;
+            }
+        }
+    }
+}
