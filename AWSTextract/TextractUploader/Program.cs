@@ -45,6 +45,11 @@ namespace TextractUploader
 
             _s3Client = new AmazonS3Client(BucketRegion);
 
+            // Get current date in YYYY-MM-DD format
+            var uploadDate = DateTime.Now.ToString("yyyy-MM-dd");
+            Console.WriteLine($"Upload date folder: {uploadDate}");
+            Console.WriteLine();
+
             foreach (var fileName in FilesToUpload)
             {
                 // Check if file exists locally
@@ -55,8 +60,12 @@ namespace TextractUploader
                     continue;
                 }
 
-                // Create the upload request
-                var key = $"{UploadFolder}/{fileName}";
+                // Get file name without extension for folder name
+                var fileNameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
+                
+                // Create the S3 key with structure: uploads/<date>/<filename>/<actualfile>
+                var key = $"{UploadFolder}/{uploadDate}/{fileNameWithoutExt}/{fileName}";
+     
                 var request = new PutObjectRequest
                 {
                     BucketName = BucketName,
@@ -67,34 +76,46 @@ namespace TextractUploader
 
                 try
                 {
-                    Console.WriteLine($"Uploading {fileName} to {BucketName}/{key}...");
+                    Console.WriteLine($"Uploading {fileName}...");
+                    Console.WriteLine($"  S3 Path: {key}");
                     var response = await _s3Client.PutObjectAsync(request);
 
                     if (response.HttpStatusCode == System.Net.HttpStatusCode.OK)
                     {
-                        Console.WriteLine($"Successfully uploaded {fileName}");
-                        Console.WriteLine($"S3 Object URL: s3://{BucketName}/{key}");
+                        Console.WriteLine($"  SUCCESS: Uploaded to s3://{BucketName}/{key}");
                     }
                     else
                     {
-                        Console.WriteLine($"Error uploading {fileName}: {response.HttpStatusCode}");
+                        Console.WriteLine($"  ERROR: Upload failed with status {response.HttpStatusCode}");
                     }
                 }
                 catch (AmazonS3Exception e)
                 {
-                    Console.WriteLine($"S3 Error: {e.Message}");
-                    Console.WriteLine($"Error Code: {e.ErrorCode}");
-                    Console.WriteLine($"Request ID: {e.RequestId}");
+                    Console.WriteLine($"  S3 Error: {e.Message}");
+                    Console.WriteLine($"  Error Code: {e.ErrorCode}");
+                    Console.WriteLine($"  Request ID: {e.RequestId}");
                 }
                 catch (Exception e)
                 {
-                    Console.WriteLine($"General Error: {e.Message}");
+                    Console.WriteLine($"  General Error: {e.Message}");
                 }
+                Console.WriteLine();
             }
 
+            Console.WriteLine("Upload completed!");
             Console.WriteLine();
-            Console.WriteLine("Press any key to exit.");
-            Console.ReadKey();
+            Console.WriteLine("Folder structure created:");
+      Console.WriteLine($"  {UploadFolder}/");
+         Console.WriteLine($"    {uploadDate}/");
+            foreach (var fileName in FilesToUpload)
+            {
+                var fileNameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
+           Console.WriteLine($"      {fileNameWithoutExt}/");
+     Console.WriteLine($"        {fileName}");
+            }
+            Console.WriteLine();
+        Console.WriteLine("Press any key to exit.");
+      Console.ReadKey();
         }
 
         private static async Task TestOllamaModel()

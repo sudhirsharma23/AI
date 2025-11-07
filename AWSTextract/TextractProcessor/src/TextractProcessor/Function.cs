@@ -32,11 +32,16 @@ namespace TextractProcessor
         private const string BucketName = "testbucket-sudhir-bsi1";
         private const string TextractRoleArn = "arn:aws:iam::912532823432:role/accesstextract-role";
         private const string SnsTopicArn = "arn:aws:sns:us-east-1:912532823432:sns-topic-textract.fifo";
+        
+        // Configure the upload date and file names to process
+  // Format: uploads/<date>/<filename>/<actualfile>
+     private const string UploadDate = "2025-01-20"; // Change this to match your upload date
         private static readonly string[] DocumentKeys = new[]
         {
-      "uploads/2025000065659.tif",
-    "uploads/2025000065659-1.tif"
+            $"uploads/{UploadDate}/2025000065659/2025000065659.tif",
+            $"uploads/{UploadDate}/2025000065659-1/2025000065659-1.tif"
         };
+        
         private const int MaxRetries = 60;
         private const int RetryInterval = 5000;
         private const string OutputDirectory = "CachedFiles_OutputFiles";
@@ -64,6 +69,24 @@ namespace TextractProcessor
             _schemaMapper = new SchemaMapperService(bedrockService, _cache, OutputDirectory);
 
             Directory.CreateDirectory(OutputDirectory);
+        }
+
+        /// <summary>
+        /// Helper method to construct S3 key with date-based folder structure
+        /// Format: uploads/<date>/<filename>/<actualfile>
+        /// </summary>
+        private static string BuildDocumentKey(string date, string fileName)
+        {
+            var fileNameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
+            return $"uploads/{date}/{fileNameWithoutExt}/{fileName}";
+        }
+
+        /// <summary>
+        /// Get document keys for a specific date
+        /// </summary>
+        private static string[] GetDocumentKeysForDate(string date, params string[] fileNames)
+        {
+            return fileNames.Select(fileName => BuildDocumentKey(date, fileName)).ToArray();
         }
 
         private IAmazonBedrockRuntime CreateBedrockClientForModel(BedrockModelConfig modelConfig)
