@@ -27,7 +27,6 @@
             "buyerPercentage": "number",
             "id": "number",
             "buyerLastName": "string",
-            "ownerCategory": "string",
             "uuid": "string"
           }
         ],

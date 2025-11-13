@@ -644,33 +644,42 @@ CRITICAL RULES - READ CAREFULLY:
    - Match property names exactly as shown in schema
 
 2. Owner/Buyer Handling Rules (EXTREMELY IMPORTANT):
+   - Count TOTAL number of owners/buyers FIRST before calculating percentages
    - If multiple owners/buyers are mentioned, create separate entries for EACH person
-   - ALWAYS distribute ownership percentages equally among all owners
-   - Example: 2 owners = 50% each, 3 owners = 33.33% each, 4 owners = 25% each
-   - Formula: buyerPercentage = 100 / (total number of buyers)
+   - PERCENTAGE CALCULATION (CRITICAL):
+     * IF ONLY 1 BUYER/OWNER -> percentage/buyerPercentage = 100 (NOT 50!)
+     * IF 2 BUYERS/OWNERS -> percentage/buyerPercentage = 50 for EACH
+     * IF 3 BUYERS/OWNERS -> percentage/buyerPercentage = 33.33 for EACH (33.34 for one)
+     * IF 4 BUYERS/OWNERS -> percentage/buyerPercentage = 25 for EACH
+   - Formula: buyerPercentage = 100 / (ACTUAL count of buyer entries)
    - Set buyerIsPrimary = true for the FIRST buyer only, false for all others
    - Include BOTH old owners (grantors) and new owners (grantees) in their respective arrays
 
 3. OLD OWNERS ARRAY RULES (CRITICAL - COMMON MISTAKE):
-   ⚠️ COMMON ERROR: Only including ONE owner when there are TWO or MORE!
+   WARNING COMMON ERROR: Only including ONE owner when there are TWO or MORE!
+   WARNING CRITICAL ERROR: Setting percentage to 50% when there is only ONE owner!
    
    Step-by-step process for oldOwners:
    a) Look for ""ownerNames"" array in source data - count the elements
    b) Look for phrases like ""X AND Y"" or ""X, Y"" in conveyance or granting text
-   c) Count how many separate names you found
+   c) Count how many separate names you found (THIS IS THE MOST IMPORTANT STEP!)
    d) Create EXACTLY that many entries in the oldOwners array
-   e) Calculate percentage = 100 / (number of names)
+   e) Calculate percentage = 100 / (ACTUAL number of entries you just created)
    f) Set first entry principal = true, rest = false
    
    Example: If you see ""ownerNames"": [""CHARLES D. SHAPIRO"", ""SUZANNE D. SHAPIRO""]
    You MUST create 2 entries in oldOwners array:
    - Entry 1: Charles with 50%
    - Entry 2: Suzanne with 50%
+   
+   Example: If you see ""ownerNames"": [""JOHN SMITH""] (ONLY ONE NAME)
+   You MUST create 1 entry in oldOwners array:
+ - Entry 1: John with 100% (NOT 50!)
 
 4. Name Parsing Rules:
    - Extract first, middle, and last names separately when available
    - If only full name is available, parse it intelligently:
- * First word = firstName
+     * First word = firstName
      * Last word = lastName
      * Middle words = middleName
    - Preserve original vesting/title information exactly as written
@@ -682,16 +691,22 @@ CRITICAL RULES - READ CAREFULLY:
    - NEVER combine multiple people into a single entry
    - Each person must have their own complete object with all fields
    - If source has ""ownerNames"": [""Name1"", ""Name2""], you MUST create 2 oldOwners entries
+ - If source has ""ownerNames"": [""Name1""], you MUST create 1 oldOwners entry with 100%
 
 6. Validation Checklist Before Returning (MANDATORY):
-   ☐ Count total owners mentioned in source data (check ownerNames array length)
-   ☐ Count total entries you created in buyer_names_component array
-   ☐ Count total entries you created in oldOwners array
-   ☐ Verify: oldOwners entries = number of names in ownerNames array
-   ☐ Verify: buyer_names_component entries = number of grantee names
-   ☐ Verify percentage split: (number of entries × each percentage) = 100
-   ☐ Verify first entry has buyerIsPrimary/principal: true
-   ☐ Verify remaining entries have buyerIsPrimary/principal: false
+   [ ] Count total owners mentioned in source data (check ownerNames array length)
+   [ ] Count total entries you created in buyer_names_component array
+   [ ] Count total entries you created in oldOwners array
+   [ ] Verify: oldOwners entries = number of names in ownerNames array
+   [ ] Verify: buyer_names_component entries = number of grantee names
+   [ ] **CRITICAL**: Verify percentage calculation:
+      - If 1 entry: percentage MUST be 100
+      - If 2 entries: each percentage MUST be 50
+      - If 3 entries: percentages MUST be 33.33, 33.33, 33.34
+      - If 4 entries: each percentage MUST be 25
+   [ ] Verify: (number of entries times each percentage) = 100
+   [ ] Verify first entry has buyerIsPrimary/principal: true
+   [ ] Verify remaining entries have buyerIsPrimary/principal: false
 
 7. Common Patterns That Indicate Multiple People:
    - ""X AND Y"" = 2 people (not 1!)
@@ -699,10 +714,18 @@ CRITICAL RULES - READ CAREFULLY:
    - ""husband and wife"" = 2 people
    - ownerNames: [""Name1"", ""Name2""] = 2 people
    - ""joint tenants"" with multiple names = multiple people
+   
+   Common Patterns That Indicate SINGLE Person:
+   - ownerNames: [""Name1""] (ARRAY WITH ONE ELEMENT) = 1 person with 100%
+   - ""John Smith, an individual"" = 1 person with 100%
+   - ""ABC Corporation"" (no ""and"" connector) = 1 entity with 100%
 
 EXAMPLES FROM YOUR EXACT USE CASE:
+
+Example A - TWO OWNERS:
 Source: ownerNames: [""CHARLES D. SHAPIRO"", ""SUZANNE D. SHAPIRO""]
-Correct oldOwners Output (2 entries required):
+Array Length = 2 -> Create 2 entries with 50% each
+Correct oldOwners Output:
 [
   {{{{
     ""firstName"": ""Charles"",
@@ -720,104 +743,85 @@ Correct oldOwners Output (2 entries required):
   }}}}
 ]
 
+Example B - ONE OWNER (CRITICAL - COMMON ERROR):
+Source: ownerNames: [""JOHN SMITH""]
+Array Length = 1 -> Create 1 entry with 100%
+Correct oldOwners Output:
+[
+  {{{{
+    ""firstName"": ""John"",
+    ""lastName"": ""Smith"",
+    ""percentage"": 100,
+    ""principal"": true
+  }}}}
+]
+[WRONG] Creating entry with percentage: 50 - THIS IS INCORRECT!
+
+Example C - TWO BUYERS:
 Source: ""Charles David Shapiro and Suzanne Denise Shapiro, as co-trustees""
-Correct buyer_names_component Output (2 entries required):
+Count = 2 people -> Create 2 entries with 50% each
+Correct buyer_names_component Output:
 [
   {{{{""firstName"": ""Charles"", ""middleName"": ""David"", ""lastName"": ""Shapiro"", ""buyerPercentage"": 50, ""buyerIsPrimary"": true}}}},
   {{{{""firstName"": ""Suzanne"", ""middleName"": ""Denise"", ""lastName"": ""Shapiro"", ""buyerPercentage"": 50, ""buyerIsPrimary"": false}}}}
 ]
 
-⚠️ FINAL WARNING: If you only create 1 entry when there are 2 or more names, your output is INCORRECT and will be rejected!
-
-Output Format: Return ONLY the complete Target Schema JSON with NO additional text, explanations, or markdown formatting.";
-        }
-
-        private static string GetFewShotExamples()
-        {
-            return @"LEARNING EXAMPLES - Study these before processing:
-
-Example 1 - OLD OWNERS (CRITICAL):
-Input Text: ""Previous owners: CHARLES D. SHAPIRO AND SUZANNE D. SHAPIRO, HUSBAND AND WIFE AS JOINT TENANTS""
-IMPORTANT: The word ""AND"" between names means TWO SEPARATE PEOPLE!
-Correct Output for oldOwners array:
+Example D - ONE BUYER (CRITICAL - COMMON ERROR):
+Source: ""John Smith, Trustee of the Smith Family Trust""
+Count = 1 person -> Create 1 entry with 100%
+Correct buyer_names_component Output:
 [
-  {
-  ""firstName"": ""Charles"",
-    ""middleName"": ""D."",
-    ""lastName"": ""Shapiro"",
-  ""percentage"": 50,
-    ""principal"": true,
-  ""titleType"": ""HUSBAND AND WIFE AS JOINT TENANTS""
-  },
-  {
-    ""firstName"": ""Suzanne"",
-    ""middleName"": ""D."",
-    ""lastName"": ""Shapiro"",
-    ""percentage"": 50,
-    ""principal"": false,
-    ""titleType"": ""HUSBAND AND WIFE AS JOINT TENANTS""
-  }
+  {{{{""firstName"": ""John"", ""lastName"": ""Smith"", ""buyerVesting"": ""TRUSTEE OF THE SMITH FAMILY TRUST"", ""buyerPercentage"": 100, ""buyerIsPrimary"": true}}}}
 ]
-WRONG (DON'T DO THIS): Only one entry with Charles - THIS IS INCORRECT!
+[WRONG] Creating entry with buyerPercentage: 50 - THIS IS INCORRECT!
 
-Example 2 - NEW OWNERS (CRITICAL):
-Input: ""GRANT DEED to Charles David Shapiro and Suzanne Denise Shapiro as co-trustees of the Shapiro Family Trust""
-IMPORTANT: ""and"" between names means TWO SEPARATE PEOPLE!
-Correct Output for buyer_names_component:
+Example E - THREE OWNERS:
+Source: ""David Chen, Lisa Martinez, and James Brown as joint tenants""
+Count = 3 people -> Create 3 entries with 33.33% each (one gets 33.34% to total 100%)
+Correct buyer_names_component Output:
 [
-  {
-    ""firstName"": ""Charles"",
-    ""middleName"": ""David"",
-    ""lastName"": ""Shapiro"",
-    ""buyerVesting"": ""AS CO-TRUSTEES OF THE SHAPIRO FAMILY TRUST"",
-    ""buyerPercentage"": 50,
-    ""buyerIsPrimary"": true
-  },
-  {
-    ""firstName"": ""Suzanne"",
-    ""middleName"": ""Denise"",
-    ""lastName"": ""Shapiro"",
-    ""buyerVesting"": ""AS CO-TRUSTEES OF THE SHAPIRO FAMILY TRUST"",
-    ""buyerPercentage"": 50,
-    ""buyerIsPrimary"": false
-  }
+  {{{{""firstName"": ""David"", ""lastName"": ""Chen"", ""buyerPercentage"": 33.33, ""buyerIsPrimary"": true}}}},
+  {{{{""firstName"": ""Lisa"", ""lastName"": ""Martinez"", ""buyerPercentage"": 33.33, ""buyerIsPrimary"": false}}}},
+  {{{{""firstName"": ""James"", ""lastName"": ""Brown"", ""buyerPercentage"": 33.34, ""buyerIsPrimary"": false}}}}
 ]
 
-Example 3 - Identifying Multiple Names:
-Look for these patterns that indicate MULTIPLE people:
-- ""X AND Y"" = 2 people
-- ""X, Y, AND Z"" = 3 people
-- ""X, Y, Z, AND W"" = 4 people
-- ""husband and wife"" = 2 people
-- ""joint tenants"" (with multiple names) = multiple people
-
-Example 4 - Three Owners:
-Input: ""David Chen, Lisa Martinez, and James Brown as joint tenants""
-Output for buyer_names_component:
-[
-  {""firstName"": ""David"", ""lastName"": ""Chen"", ""buyerPercentage"": 33.33, ""buyerIsPrimary"": true},
-  {""firstName"": ""Lisa"", ""lastName"": ""Martinez"", ""buyerPercentage"": 33.33, ""buyerIsPrimary"": false},
-  {""firstName"": ""James"", ""lastName"": ""Brown"", ""buyerPercentage"": 33.34, ""buyerIsPrimary"": false}
-]
-
-Example 5 - From ownerNames Array:
+Example F - From ownerNames Array (TWO OWNERS):
 Input in ownerNames: [""CHARLES D. SHAPIRO"", ""SUZANNE D. SHAPIRO""]
 This is an ARRAY with 2 elements = 2 SEPARATE OWNERS!
 Correct Output for oldOwners:
 [
-  {""firstName"": ""Charles"", ""middleName"": ""D."", ""lastName"": ""Shapiro"", ""percentage"": 50, ""principal"": true},
-  {""firstName"": ""Suzanne"", ""middleName"": ""D."", ""lastName"": ""Shapiro"", ""percentage"": 50, ""principal"": false}
+  {{""firstName"": ""Charles"", ""middleName"": ""D."", ""lastName"": ""Shapiro"", ""percentage"": 50, ""principal"": true}},
+  {{""firstName"": ""Suzanne"", ""middleName"": ""D."", ""lastName"": ""Shapiro"", ""percentage"": 50, ""principal"": false}}
 ]
+
+Example G - From ownerNames Array (ONE OWNER - CRITICAL):
+Input in ownerNames: [""JOHN SMITH""]
+This is an ARRAY with 1 element = 1 OWNER with 100 percent!
+Correct Output for oldOwners:
+[
+  {{""firstName"": ""John"", ""lastName"": ""Smith"", ""percentage"": 100, ""principal"": true}}
+]
+WRONG: Setting percentage to 50 - THIS IS INCORRECT!
+CORRECT: One owner in array = 100 percent
 
 CRITICAL PARSING RULES:
 1. Count ALL names separated by commas or ""and""/""AND""
-2. Create ONE SEPARATE ENTRY for EACH name you counted
-3. NEVER skip a name - if you see 2 names, create 2 entries; if you see 3 names, create 3 entries
-4. Calculate percentage: 100 ÷ (number of names)
-5. Set first entry principal/buyerIsPrimary = true, all others = false
+2. If NO ""and""/""AND"" connector and NO comma-separated names then Only 1 person
+3. Create ONE SEPARATE ENTRY for EACH name you counted
+4. Calculate percentage: 100 divided by (ACTUAL number of entries)
+5. VERIFY: 1 entry = 100 percent, 2 entries = 50 percent each, 3 entries = 33.33 percent each
+6. Set first entry principal or buyerIsPrimary = true, all others = false
 
----END OF EXAMPLES---
-";
+PERCENTAGE ERROR PREVENTION:
+- DO NOT default to 50 percent without counting
+- DO NOT use 50 percent for single owners
+- ALWAYS count first, then calculate: 100 divided by count
+- One owner or buyer equals 100 percent (NOT 50 percent)
+- Two owners or buyers equals 50 percent each
+- Three owners or buyers equals 33.33 percent each (one gets 33.34)
+- Four owners or buyers equals 25 percent each
+
+Output Format: Return ONLY the complete Target Schema JSON with NO additional text, explanations, or markdown formatting.";
         }
 
         private object CreateModelRequest(string prompt)
@@ -884,6 +888,152 @@ CRITICAL PARSING RULES:
         private static int EstimateTokenCount(string text)
         {
             return text?.Length / 4 ?? 0;
+        }
+
+        private static string GetFewShotExamples()
+        {
+            return @"LEARNING EXAMPLES - Study these before processing:
+
+Example 1 - OLD OWNERS (CRITICAL):
+Input Text: ""Previous owners: CHARLES D. SHAPIRO AND SUZANNE D. SHAPIRO, HUSBAND AND WIFE AS JOINT TENANTS""
+IMPORTANT: The word ""AND"" between names means TWO SEPARATE PEOPLE!
+Correct Output for oldOwners array:
+[
+  {{
+    ""firstName"": ""Charles"",
+    ""middleName"": ""D."",
+    ""lastName"": ""Shapiro"",
+    ""percentage"": 50,
+    ""principal"": true,
+    ""titleType"": ""HUSBAND AND WIFE AS JOINT TENANTS""
+  }},
+  {{
+    ""firstName"": ""Suzanne"",
+    ""middleName"": ""D."",
+    ""lastName"": ""Shapiro"",
+    ""percentage"": 50,
+    ""principal"": false,
+    ""titleType"": ""HUSBAND AND WIFE AS JOINT TENANTS""
+  }}
+]
+WRONG (DON'T DO THIS): Only one entry with Charles - THIS IS INCORRECT!
+
+Example 1B - ONE OLD OWNER (CRITICAL - PREVENT COMMON ERROR):
+Input Text: ""Previous owner: JOHN SMITH, AN INDIVIDUAL""
+IMPORTANT: Only ONE person mentioned = 100% ownership!
+Correct Output for oldOwners array:
+[
+  {{
+    ""firstName"": ""John"",
+    ""lastName"": ""Smith"",
+    ""percentage"": 100,
+    ""principal"": true,
+    ""titleType"": ""AN INDIVIDUAL""
+  }}
+]
+WRONG OUTPUT: Setting percentage to 50 when there is only one owner - THIS IS INCORRECT!
+CORRECT: One owner = 100 percent (not 50 percent!)
+
+Example 2 - NEW OWNERS (CRITICAL):
+Input: ""GRANT DEED to Charles David Shapiro and Suzanne Denise Shapiro as co-trustees of the Shapiro Family Trust""
+IMPORTANT: ""and"" between names means TWO SEPARATE PEOPLE!
+Correct Output for buyer_names_component:
+[
+  {{
+    ""firstName"": ""Charles"",
+    ""middleName"": ""David"",
+    ""lastName"": ""Shapiro"",
+    ""buyerVesting"": ""AS CO-TRUSTEES OF THE SHapiro FAMILY TRUST"",
+ ""buyerPercentage"": 50,
+    ""buyerIsPrimary"": true
+  }},
+  {{
+    ""firstName"": ""Suzanne"",
+    ""middleName"": ""Denise"",
+    ""lastName"": ""Shapiro"",
+    ""buyerVesting"": ""AS CO-TRUSTEES OF THE SHapiro FAMILY TRUST"",
+    ""buyerPercentage"": 50,
+    ""buyerIsPrimary"": false
+  }}
+]
+
+Example 2B - ONE NEW OWNER (CRITICAL - PREVENT COMMON ERROR):
+Input: ""GRANT DEED to John Smith, Trustee of the Smith Family Trust""
+IMPORTANT: Only ONE person mentioned = 100% ownership!
+Correct Output for buyer_names_component:
+[
+  {{
+    ""firstName"": ""John"",
+    ""lastName"": ""Smith"",
+    ""buyerVesting"": ""TRUSTEE OF THE SMITH FAMILY TRUST"",
+    ""buyerPercentage"": 100,
+    ""buyerIsPrimary"": true
+  }}
+]
+WRONG OUTPUT: Setting buyerPercentage to 50 when there is only one buyer - THIS IS INCORRECT!
+CORRECT: One buyer = 100 percent (not 50 percent!)
+
+Example 3 - Identifying Multiple Names:
+Look for these patterns that indicate MULTIPLE people:
+- ""X AND Y"" = 2 people
+- ""X, Y, AND Z"" = 3 people
+- ""X, Y, Z, AND W"" = 4 people
+- ""husband and wife"" = 2 people
+- ""joint tenants"" (with multiple names) = multiple people
+
+Look for these patterns that indicate SINGLE person:
+- ""X, an individual"" = 1 person (100%)
+- ""X Corporation"" (no AND connector) = 1 entity (100%)
+- ""X, Trustee"" (no AND connector) = 1 person (100%)
+- ownerNames: [""Name1""] (array with ONE element) = 1 person (100%)
+
+Example 4 - Three Owners:
+Input: ""David Chen, Lisa Martinez, and James Brown as joint tenants""
+Output for buyer_names_component:
+[
+  {{""firstName"": ""David"", ""lastName"": ""Chen"", ""buyerPercentage"": 33.33, ""buyerIsPrimary"": true}},
+  {{""firstName"": ""Lisa"", ""lastName"": ""Martinez"", ""buyerPercentage"": 33.33, ""buyerIsPrimary"": false}},
+  {{""firstName"": ""James"", ""lastName"": ""Brown"", ""buyerPercentage"": 33.34, ""buyerIsPrimary"": false}}
+]
+
+Example 5 - From ownerNames Array (TWO OWNERS):
+Input in ownerNames: [""CHARLES D. SHAPIRO"", ""SUZANNE D. SHAPIRO""]
+This is an ARRAY with 2 elements = 2 SEPARATE OWNERS!
+Correct Output for oldOwners:
+[
+  {{""firstName"": ""Charles"", ""middleName"": ""D."", ""lastName"": ""Shapiro"", ""percentage"": 50, ""principal"": true}},
+  {{""firstName"": ""Suzanne"", ""middleName"": ""D."", ""lastName"": ""Shapiro"", ""percentage"": 50, ""principal"": false}}
+]
+
+Example 5B - From ownerNames Array (ONE OWNER - CRITICAL):
+Input in ownerNames: [""JOHN SMITH""]
+This is an ARRAY with 1 element = 1 OWNER with 100 percent!
+Correct Output for oldOwners:
+[
+  {{""firstName"": ""John"", ""lastName"": ""Smith"", ""percentage"": 100, ""principal"": true}}
+]
+WRONG: Setting percentage to 50 - THIS IS INCORRECT!
+CORRECT: One owner in array = 100 percent
+
+CRITICAL PARSING RULES:
+1. Count ALL names separated by commas or ""and""/""AND""
+2. If NO ""and""/""AND"" connector and NO comma-separated names then Only 1 person
+3. Create ONE SEPARATE ENTRY for EACH name you counted
+4. Calculate percentage: 100 divided by (ACTUAL number of entries)
+5. VERIFY: 1 entry = 100 percent, 2 entries = 50 percent each, 3 entries = 33.33 percent each
+6. Set first entry principal or buyerIsPrimary = true, all others = false
+
+PERCENTAGE ERROR PREVENTION:
+- DO NOT default to 50 percent without counting
+- DO NOT use 50 percent for single owners
+- ALWAYS count first, then calculate: 100 divided by count
+- One owner or buyer equals 100 percent (NOT 50 percent)
+- Two owners or buyers equals 50 percent each
+- Three owners or buyers equals 33.33 percent each (one gets 33.34)
+- Four owners or buyers equals 25 percent each
+
+---END OF EXAMPLES---
+";
         }
     }
 
