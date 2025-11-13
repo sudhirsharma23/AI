@@ -32,16 +32,16 @@ namespace TextractProcessor
         private const string BucketName = "testbucket-sudhir-bsi1";
         private const string TextractRoleArn = "arn:aws:iam::912532823432:role/accesstextract-role";
         private const string SnsTopicArn = "arn:aws:sns:us-east-1:912532823432:sns-topic-textract.fifo";
-        
+
         // Configure the upload date and file names to process
-  // Format: uploads/<date>/<filename>/<actualfile>
-     private const string UploadDate = "2025-11-07"; // Change this to match your upload date
+        // Format: uploads/<date>/<filename>/<actualfile>
+        private const string UploadDate = "2025-11-10"; // Change this to match your upload date
         private static readonly string[] DocumentKeys = new[]
         {
             $"uploads/{UploadDate}/2025000065659/2025000065659.tif",
             $"uploads/{UploadDate}/2025000065659-1/2025000065659-1.tif"
         };
-        
+
         private const int MaxRetries = 60;
         private const int RetryInterval = 5000;
         private const string OutputDirectory = "CachedFiles_OutputFiles";

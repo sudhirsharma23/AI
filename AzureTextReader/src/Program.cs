@@ -19,8 +19,14 @@ namespace ImageTextExtractorApp
 {
     internal static class Program
     {
+        private const string OutputDirectory = "OutputFiles";
+
         private static async Task Main()
         {
+            // Create OutputFiles directory if it doesn't exist
+            Directory.CreateDirectory(OutputDirectory);
+            Console.WriteLine($"Output directory created/verified: {Path.Combine(Directory.GetCurrentDirectory(), OutputDirectory)}");
+
             using var memoryCache = new MemoryCache(new MemoryCacheOptions());
             await RunAsync(memoryCache);
         }
@@ -37,220 +43,595 @@ namespace ImageTextExtractorApp
             var endpoint = config.Endpoint + "/contentunderstanding/analyzers/prebuilt-documentAnalyzer:analyze?api-version=2025-05-01-preview";
             var subscriptionKey = config.SubscriptionKey;
 
-            var imageUrls = new[] { "https://github.com/sudhirsharma23/azure-ai-foundry-image-text-extractor/blob/main/src/images/2025000065660-1.tif?raw=true",
-        "https://github.com/sudhirsharma23/azure-ai-foundry-image-text-extractor/blob/main/src/images/2025000065660.tif?raw=true"
- };
+            var imageUrls = new[] {
+          "https://github.com/sudhirsharma23/azure-ai-foundry-image-text-extractor/blob/main/src/images/2025000065659-1.tif?raw=true",
+          "https://github.com/sudhirsharma23/azure-ai-foundry-image-text-extractor/blob/main/src/images/2025000065659.tif?raw=true"
+            };
 
             // Use a single HttpClient instance for all requests
             using var client = new HttpClient();
             client.DefaultRequestHeaders.Add("Ocp-Apim-Subscription-Key", subscriptionKey);
 
+            // Step 1: Extract OCR data from all images and cache it
+            var allOcrResults = new List<OcrResult>();
+            var combinedMarkdown = new StringBuilder();
+
             foreach (var imageUrl in imageUrls)
             {
-                // Prepare the request body for the POST request
-                var requestBody = $"{{\"url\":\"{imageUrl}\"}}";
-                var content = new StringContent(requestBody, Encoding.UTF8, "application/json");
+                Console.WriteLine($"\n=== Processing image: {imageUrl} ===");
 
-                // Send POST request to start extraction
-                var postResponse = await client.PostAsync(endpoint, content);
-                postResponse.EnsureSuccessStatusCode();
+                // Generate cache key for OCR result
+                var ocrCacheKey = ComputeSimpleCacheKey($"OCR_{imageUrl}");
+                string markdown;
 
-                // Retrieve the Operation-Location header for polling
-                if (!postResponse.Headers.TryGetValues("Operation-Location", out var values))
+                // Try to get cached OCR result
+                if (memoryCache.TryGetValue(ocrCacheKey, out var cachedOcr) && cachedOcr is string cachedMarkdown)
                 {
-                    Console.WriteLine("Operation-Location header not found. Skipping this image.");
-                    continue;
+                    Console.WriteLine($"Cache hit for OCR data: {imageUrl}");
+                    markdown = cachedMarkdown;
                 }
-                var operationLocation = values.First();
-                Console.WriteLine($"Operation-Location: {operationLocation}");
-
-                ExtractionOperation? extractionOperation = null;
-                // Poll the operation status until it is 'Succeeded'
-                do
+                else
                 {
-                    var getRequest = new HttpRequestMessage(HttpMethod.Get, operationLocation);
-                    getRequest.Headers.Add("Ocp-Apim-Subscription-Key", subscriptionKey);
-                    var getResponse = await client.SendAsync(getRequest);
-                    getResponse.EnsureSuccessStatusCode();
-                    var result = await getResponse.Content.ReadAsStringAsync();
+                    Console.WriteLine($"Cache miss - Extracting OCR data from: {imageUrl}");
+                    markdown = await ExtractOcrFromImage(client, endpoint, subscriptionKey, imageUrl);
 
-                    extractionOperation = JsonSerializer.Deserialize<ExtractionOperation>(result);
-                    if (extractionOperation == null)
+                    // Cache the OCR result
+                    var ocrCacheOptions = new MemoryCacheEntryOptions
                     {
-                        Console.WriteLine("Failed to parse ExtractionOperation. Skipping this image.");
-                        break;
-                    }
-                    if (extractionOperation.status != "Succeeded")
-                    {
-                        Console.WriteLine($"Status: {extractionOperation.status}. Waiting before retry...");
-                        await Task.Delay(3000); // Wait3 seconds before retrying
-                    }
-                } while (extractionOperation.status != "Succeeded");
+                        AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(30), // OCR results don't change
+                        SlidingExpiration = TimeSpan.FromDays(7)
+                    };
+                    memoryCache.Set(ocrCacheKey, markdown, ocrCacheOptions);
+                    Console.WriteLine($"Cached OCR result for: {imageUrl}");
+                }
 
-                // Output the extracted content if available
-                if (extractionOperation?.result?.contents != null && extractionOperation.result.contents.Count > 0)
+                if (!string.IsNullOrEmpty(markdown))
                 {
-                    Console.WriteLine($"Parsed ExtractionOperation: status={extractionOperation.status}, contents={extractionOperation.result.contents[0].markdown}");
+                    allOcrResults.Add(new OcrResult { ImageUrl = imageUrl, Markdown = markdown });
+                    combinedMarkdown.AppendLine($"### Document: {Path.GetFileName(imageUrl)}");
+                    combinedMarkdown.AppendLine(markdown);
+                    combinedMarkdown.AppendLine("\n---\n");
+                }
+            }
 
-                    // Initialize the AzureOpenAIClient with secure credentials
-                    var credential = new ApiKeyCredential(subscriptionKey);
-                    var azureClient = new AzureOpenAIClient(new Uri(config.Endpoint), credential);
+            if (allOcrResults.Count == 0)
+            {
+                Console.WriteLine("No OCR data extracted. Exiting.");
+                return;
+            }
 
-                    string schemaText = File.ReadAllText("E:\\Sudhir\\Prj\\files\\zip\\src\\invoice_schema - Copy.json");
-                    JsonNode jsonSchema = JsonNode.Parse(schemaText);
+            // Step 2: Save combined OCR results to OutputFiles directory
+            var timestamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
+            var combinedOcrPath = Path.Combine(OutputDirectory, $"combined_ocr_results_{timestamp}.md");
+            File.WriteAllText(combinedOcrPath, combinedMarkdown.ToString(), Encoding.UTF8);
+            Console.WriteLine($"\nSaved combined OCR results to: {combinedOcrPath}");
 
+            // Step 3: Process with ChatCompletion (with caching)
+            await ProcessWithChatCompletion(memoryCache, config, subscriptionKey, combinedMarkdown.ToString(), timestamp);
+        }
 
-                    // Initialize the ChatClient with the specified deployment name
-                    ChatClient chatClient = azureClient.GetChatClient("gpt-4o-mini");
+        // Extract OCR data from a single image
+        private static async Task<string> ExtractOcrFromImage(HttpClient client, string endpoint, string subscriptionKey, string imageUrl)
+        {
+            // Prepare the request body for the POST request
+            var requestBody = $"{{\"url\":\"{imageUrl}\"}}";
+            var content = new StringContent(requestBody, Encoding.UTF8, "application/json");
 
-                    // Create a list of chat messages
-                    var messages = new List<OpenAI.Chat.ChatMessage>
-   {
-      new SystemChatMessage(@" You are an OCR-like data extraction tool that extracts deed data from tif.
+            // Send POST request to start extraction
+            var postResponse = await client.PostAsync(endpoint, content);
+            postResponse.EnsureSuccessStatusCode();
 
-           1. Extract all values from the attached Deed PDF. Identify and return the following details for each property transaction:
+            // Retrieve the Operation-Location header for polling
+            if (!postResponse.Headers.TryGetValues("Operation-Location", out var values))
+            {
+                Console.WriteLine("Operation-Location header not found. Skipping this image.");
+                return string.Empty;
+            }
+            var operationLocation = values.First();
+            Console.WriteLine($"Operation-Location: {operationLocation}");
 
-          2. Grantor (seller/transferor) name
+            ExtractionOperation? extractionOperation = null;
+            // Poll the operation status until it is 'Succeeded'
+            do
+            {
+                var getRequest = new HttpRequestMessage(HttpMethod.Get, operationLocation);
+                getRequest.Headers.Add("Ocp-Apim-Subscription-Key", subscriptionKey);
+                var getResponse = await client.SendAsync(getRequest);
+                getResponse.EnsureSuccessStatusCode();
+                var result = await getResponse.Content.ReadAsStringAsync();
 
-         3. Grantee (buyer/transferee) name
+                extractionOperation = JsonSerializer.Deserialize<ExtractionOperation>(result);
+                if (extractionOperation == null)
+                {
+                    Console.WriteLine("Failed to parse ExtractionOperation. Skipping this image.");
+                    break;
+                }
+                if (extractionOperation.status != "Succeeded")
+                {
+                    Console.WriteLine($"Status: {extractionOperation.status}. Waiting before retry...");
+                    await Task.Delay(3000); // Wait 3 seconds before retrying
+                }
+            } while (extractionOperation?.status != "Succeeded");
 
-                 4. Property address
+            // Return the extracted markdown content
+            if (extractionOperation?.result?.contents != null && extractionOperation.result.contents.Count > 0)
+            {
+                return extractionOperation.result.contents[0].markdown ?? string.Empty;
+            }
 
-       5. Legal description
+            return string.Empty;
+        }
 
-            6. Sale price or transaction amount
+        // Process combined OCR data with ChatCompletion
+        private static async Task ProcessWithChatCompletion(IMemoryCache memoryCache, AzureAIConfig config, string subscriptionKey, string combinedMarkdown, string timestamp)
+        {
+            Console.WriteLine("\n=== Processing with Azure OpenAI ChatCompletion ===");
 
- 7. Tax information (if present)
+            // Initialize the AzureOpenAIClient with secure credentials
+            var credential = new ApiKeyCredential(subscriptionKey);
+            var azureClient = new AzureOpenAIClient(new Uri(config.Endpoint), credential);
 
-  8. Recording date
+            // Load JSON schema
+            string schemaText = File.ReadAllText("E:\\Sudhir\\Prj\\files\\zip\\src\\invoice_schema - Copy.json");
+            JsonNode jsonSchema = JsonNode.Parse(schemaText);
 
- 9. Document number or reference
+            // Initialize the ChatClient with the specified deployment name
+            ChatClient chatClient = azureClient.GetChatClient("gpt-4o-mini");
 
-            10. Notary information and date
+            // Create a list of chat messages
+            var messages = new List<OpenAI.Chat.ChatMessage>
+{
+         new SystemChatMessage(@"You are an intelligent OCR-like data extraction tool that extracts deed and property transaction data from multiple documents, including preliminary change of ownership reports.
 
-       Any other relevant fields or notes mentioned in the deed
+DYNAMIC SCHEMA EXTENSION - IMPORTANT:
+You have the ability to EXTEND the provided schema with additional fields found in the documents. Follow these rules:
 
-    You are a data transformation tool that takes in JSON data and a reference JSON schema, and outputs JSON data according to the schema.
-           Not all of the data in the input JSON will fit the schema, so you may need to omit some data or add null values to the output JSON.
-           Translate all data into English if not already in English.
-     Ensure values are formatted as specified in the schema (e.g. dates as YYYY-MM-DD).
-        Here is the schema: " + $"{jsonSchema}"),
-     new UserChatMessage($"Please extract the data, grouping data according to theme/sub groups, and then output into JSON and provide the clean json data {extractionOperation.result.contents[0].markdown}")
-           };
+1. ANALYZE DOCUMENT CONTENT FIRST:
+   - Review ALL text, fields, checkboxes, tables, and sections in the documents
+   - Identify data points that are relevant to property transactions, ownership, and transfers
+   - Look for structured forms, labeled fields, and tabular data
 
-                    // Create chat completion options
-                    var options = new ChatCompletionOptions
+2. EXTEND SCHEMA DYNAMICALLY:
+   If you find relevant data fields NOT in the provided schema:
+   - Add them to the appropriate section (saleData, transfer_information, oldOwners.customFields, etc.)
+   - Use descriptive field names following snake_case convention (e.g., 'property_tax_year', 'document_recording_fee')
+   - Choose appropriate data types: 'string', 'number', 'boolean', 'date', or 'array'
+   - For yes/no checkboxes not in schema, add them to 'transfer_information' as string fields with 'yes'/'no' values
+   - For additional owner-related fields, add them to 'oldOwners[].customFields'
+   - For property-specific details, add them to 'land_records_from_document[].customFields'
+
+3. COMMON FIELDS TO LOOK FOR (add if found but not in base schema):
+   DOCUMENT DETAILS:
+   - document_recording_number, book_number, page_number, instrument_number
+   - filing_date, execution_date, acknowledgment_date
+   - documentary_transfer_tax, recording_fee, total_fees
+   
+   PROPERTY DETAILS:
+   - property_tax_year, property_tax_amount, property_tax_status
+   - zoning_classification, land_use_type, lot_number, block_number
+   - square_footage, acreage, number_of_units
+   - flood_zone, fire_hazard_zone, seismic_zone
+   
+   TRANSFER/TRANSACTION DETAILS:
+   - consideration_amount, cash_consideration, other_consideration
+   - financing_type, loan_amount, lender_name
+   - escrow_number, escrow_company, title_company
+   - real_estate_agent, broker_information
+   
+   OWNER/BUYER DETAILS:
+   - marital_status, citizenship_status
+   - entity_type (for corporations/LLCs), entity_state_of_formation
+   - contact_phone, contact_email
+   - mailing_address_different_from_property
+   
+   LEGAL/COMPLIANCE:
+   - affidavit_of_death (for estate transfers)
+   - court_order_number (for foreclosures/judicial sales)
+   - prop_13_base_year_transfer, prop_19_eligibility
+   - senior_citizen_exemption, disabled_veteran_exemption
+   
+   PRELIMINARY CHANGE OF OWNERSHIP (if checkboxes found):
+   - Any checkbox or yes/no field not listed in the base schema
+   - Section-specific notes or explanations
+   - Signature fields, dates, preparer information
+
+4. FIELD NAMING CONVENTIONS:
+   - Use snake_case: 'property_tax_year' not 'PropertyTaxYear'
+   - Be descriptive: 'document_recording_fee' not just 'fee'
+   - Use prefixes for context: 'buyer_phone_number', 'seller_phone_number'
+   - For dates, include '_date' suffix: 'signature_date', 'notarization_date'
+   - For amounts, include '_amount' suffix: 'transfer_tax_amount', 'exemption_amount'
+
+5. DATA TYPE SELECTION:
+   - Use 'date' for any date field (format YYYY-MM-DD)
+   - Use 'number' for amounts, counts, percentages, IDs
+   - Use 'string' for text, names, addresses, yes/no values
+   - Use 'boolean' for true/false flags
+   - Use 'array' for multiple items (e.g., multiple parcels, multiple exemptions)
+
+CRITICAL INSTRUCTIONS FOR OWNER EXTRACTION:
+
+1. IDENTIFY ALL OWNERS/GRANTORS:
+   - Look for terms like 'Grantor', 'Seller', 'Transferor', 'Owner', or names before phrases like 'convey', 'grant', 'transfer'
+   - Extract EVERY individual owner mentioned in the deed
+   - If multiple owners are listed (e.g., 'John Smith and Jane Smith'), extract each person as a SEPARATE entry in the oldOwners array
+
+2. POPULATE oldOwners ARRAY (NOT buyer_names_component):
+   - The schema uses 'oldOwners' array inside 'parcel_match_cards_component.mainParcels[0].oldOwners'
+   - Each owner must be a separate object in this array
+   - REQUIRED fields for each oldOwner:
+     * lastName: Extract last name
+     * customFields.owner_full_name: Full name of the owner
+     * percentage: Calculate ownership percentage (if 2 owners = 50% each, 3 owners = 33.33% each, 4 owners = 25% each)
+     * principal: Set to true for primary/first owner, false for others
+     * sequenceNumber: 1 for first owner, 2 for second, etc.
+     * setNumber: Usually 1 for all owners in same transaction
+  * addressLine1: Owner's address if available
+     * city: Owner's city
+     * zipCode: Owner's zip code
+     * customFields.owner_date_acquired: Date when owner acquired the property
+ * customFields.owner_base_effective_date: Base effective date if available
+   - ADD ADDITIONAL FIELDS to customFields if found in document (e.g., owner_phone_number, owner_email, owner_marital_status)
+
+3. PERCENTAGE CALCULATION RULES:
+   - If 1 owner: percentage = 100
+   - If 2 owners: percentage = 50 for each
+   - If 3 owners: percentage = 33.33 for each (or 33.34 for one to total 100)
+   - If 4 owners: percentage = 25 for each
+   - If 'undivided interest' or specific percentage is mentioned, use that value
+   - Total percentages must equal 100
+
+4. BUYER INFORMATION (NEW OWNERS):
+   - Extract buyers/grantees into 'buyer_names_component' array
+   - Calculate buyerPercentage using same rules as above
+   - ADD ADDITIONAL FIELDS if found in document
+
+5. EXTRACT STANDARD DEED DATA:
+   - Property address and legal description
+   - Sale price or transaction amount (cos_price)
+ - Recording date (recorded_date)
+   - Notary date (notary_date)
+   - Document number (document_source_id)
+   - Deed type (deed_transfer_type)
+   - Document stamp amount (docstamp_amount)
+   - PLUS any additional document fields found
+
+6. EXTRACT PRELIMINARY CHANGE OF OWNERSHIP REPORT - TRANSFER INFORMATION:
+   Look for checkboxes or yes/no indicators in the 'Preliminary Change of Ownership Report' section. Extract the following fields into 'transfer_information' object:
+   
+   BASE SCHEMA FIELDS:
+   - change_in_ownership_or_control: 'yes' or 'no'
+   - transfer_of_interest_in_real_property: 'yes' or 'no'
+   - property_purchased_from_or_exchanged_with_related_person: 'yes' or 'no'
+   - property_received_as_gift_or_inheritance: 'yes' or 'no'
+   - transfer_solely_between_spouses: 'yes' or 'no'
+   - transfer_into_trust: 'yes' or 'no'
+   - transfer_from_trust: 'yes' or 'no'
+   - transfer_by_legal_entity: 'yes' or 'no'
+   - creation_of_lease: 'yes' or 'no'
+   - assignment_or_sublease: 'yes' or 'no'
+   - termination_of_lease: 'yes' or 'no'
+   - replacement_of_property_under_eminent_domain: 'yes' or 'no'
+   - transfer_of_property_to_governmental_entity: 'yes' or 'no'
+   - exclusion_under_revenue_and_taxation_code: 'yes' or 'no'
+   - other_reason_property_not_subject_to_reappraisal: 'yes' or 'no'
+   - recorded_document_type: Extract the type
+   - assessor_parcel_number: Extract the APN
+   - additional_transfer_information_notes: Any additional notes
+   
+   ADDITIONAL FIELDS (add if found):
+   - Any other checkboxes or yes/no questions in the report
+   - Preparer name, preparer phone, preparer signature date
+   - Specific code sections referenced (e.g., 'revenue_code_section_62', 'revenue_code_section_63')
+   - Transfer reason details, exemption claim details
+
+7. DATE FORMATTING:
+   - All dates must be in YYYY-MM-DD format
+   - Convert formats like 'January 15, 2025' to '2025-01-15'
+   - Convert '01/15/2025' to '2025-01-15'
+
+8. SCHEMA COMPLIANCE AND EXTENSION:
+   - START with the provided base schema structure
+   - MAINTAIN all existing fields and their data types
+   - ADD new fields found in documents to appropriate sections
+   - Use proper data types for new fields
+   - Include all nested structures correctly
+   - Omit fields if no data is available (don't use null unless schema requires it)
+
+9. OUTPUT FORMAT:
+   - Return valid JSON with both base schema fields AND dynamically added fields
+ - Group related extended fields together
+   - Maintain consistent naming and structure
+   - Ensure all added fields have actual values from the document (not placeholders)
+
+Here is the BASE schema to start with (you may extend it): " + $"{jsonSchema}"),
+                new UserChatMessage($@"Please extract and analyze ALL data from the documents below. 
+
+INSTRUCTIONS:
+1. Extract all fields defined in the base schema
+2. Identify ANY additional relevant fields found in the documents that are NOT in the base schema
+3. Add those additional fields to the appropriate sections with proper naming and data types
+4. Pay special attention to:
+   - ALL owners (grantors/sellers) → oldOwners array with correct percentages
+   - ALL buyers (grantees) → buyer_names_component
+   - ALL transfer information checkboxes → transfer_information object
+   - ANY additional document details, fees, dates, references
+   - ANY property-specific information (tax year, zoning, size, etc.)
+   - ANY contact information, legal references, or compliance details
+
+5. Return comprehensive JSON that includes BOTH base schema fields AND any additional fields you discovered
+
+DOCUMENTS:
+
+{combinedMarkdown}")
+         };
+
+            // Create chat completion options
+            var options = new ChatCompletionOptions
+            {
+                Temperature = (float)0.7,
+                MaxOutputTokenCount = 13107,
+                TopP = (float)0.95,
+                FrequencyPenalty = (float)0,
+                PresencePenalty = (float)0,
+            };
+
+            try
+            {
+                // Compute a cache key for this combination of messages + options
+                var cacheKey = ComputeCacheKey(messages, options, "combined_documents");
+
+                // Try to pull cached response
+                if (memoryCache.TryGetValue(cacheKey, out var cachedObj) && cachedObj is string cachedJson)
+                {
+                    Console.WriteLine($"Cache hit for ChatCompletion - using cached response.");
+                    await SaveFinalCleanedJson(cachedJson, timestamp);
+                }
+                else
+                {
+                    Console.WriteLine($"Cache miss - Calling ChatClient.CompleteChat...");
+                    // Create the chat completion request
+                    ChatCompletion completion = chatClient.CompleteChat(messages, options);
+
+                    // Serialize the response to JSON for consistent caching / logging
+                    var completionJson = JsonSerializer.Serialize(completion, new JsonSerializerOptions() { WriteIndented = true });
+
+                    // Cache the serialized completion with reasonable expiration
+                    var cacheEntryOptions = new MemoryCacheEntryOptions
                     {
-                        Temperature = (float)0.7,
-                        MaxOutputTokenCount = 13107,
-
-                        TopP = (float)0.95,
-                        FrequencyPenalty = (float)0,
-                        PresencePenalty = (float)0,
+                        AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(7),
+                        SlidingExpiration = TimeSpan.FromHours(24)
                     };
 
-                    try
+                    memoryCache.Set(cacheKey, completionJson, cacheEntryOptions);
+                    Console.WriteLine($"Cached ChatCompletion result");
+
+                    // Extract and save the final cleaned JSON
+                    await SaveFinalCleanedJson(completionJson, timestamp);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"An error occurred during ChatCompletion: {ex.Message}");
+            }
+        }
+
+        // Save the final cleaned JSON output
+        private static async Task SaveFinalCleanedJson(string completionJson, string timestamp)
+        {
+            try
+            {
+                // Deserialize to get the completion object
+                var completion = JsonSerializer.Deserialize<JsonElement>(completionJson);
+
+                // Extract model text from the completion
+                var modelText = ExtractModelTextFromJson(completion);
+
+                if (string.IsNullOrWhiteSpace(modelText))
+                {
+                    Console.WriteLine("No model text found in completion response.");
+                    return;
+                }
+
+                // Extract JSON objects from the model text
+                var jsonObjects = ExtractJsonObjects(modelText);
+
+                if (jsonObjects.Count > 0)
+                {
+                    // Clean and save the first valid JSON object/array
+                    var cleanedJson = CleanAndReturnJson(jsonObjects);
+
+                    if (!string.IsNullOrEmpty(cleanedJson))
                     {
-                        // Compute a cache key for this combination of messages + options + imageUrl
-                        var cacheKey = ComputeCacheKey(messages, options, imageUrl);
+                        var finalOutputPath = Path.Combine(OutputDirectory, $"final_output_{timestamp}.json");
+                        File.WriteAllText(finalOutputPath, cleanedJson, Encoding.UTF8);
+                        Console.WriteLine($"Saved final cleaned JSON to: {finalOutputPath}");
 
-                        // Try to pull cached response
-                        if (memoryCache.TryGetValue(cacheKey, out var cachedObj) && cachedObj is string cachedJson)
-                        {
-                            Console.WriteLine($"Cache hit for {imageUrl} - using cached chat completion.");
-                            Console.WriteLine(cachedJson);
-                        }
-                        else
-                        {
-                            Console.WriteLine($"Cache miss for {imageUrl} - calling ChatClient.CompleteChat...");
-                            // Create the chat completion request
-                            ChatCompletion completion = chatClient.CompleteChat(messages, options);
-
-                            // Serialize the response to JSON for consistent caching / logging
-                            var completionJson = JsonSerializer.Serialize(completion, new JsonSerializerOptions() { WriteIndented = true });
-
-                            // Try to extract model text from the completion and write clean JSON file if present
-                            try
-                            {
-                                var modelText = ExtractModelText(completion);
-                                if (string.IsNullOrWhiteSpace(modelText))
-                                {
-                                    // fallback to searching the serialized completion JSON
-                                    modelText = completionJson;
-                                }
-
-                                var jsonObjects = ExtractJsonObjects(modelText);
-                                if (jsonObjects.Count > 0)
-                                {
-                                    // take the first JSON object/array found and pretty-print to file
-                                    var cleanJson = jsonObjects[0];
-                                    try
-                                    {
-                                        var node = JsonNode.Parse(cleanJson);
-                                        var pretty = JsonSerializer.Serialize(node, new JsonSerializerOptions { WriteIndented = true });
-                                        var outPath = Path.Combine(Directory.GetCurrentDirectory(), $"clean_output_{Path.GetFileNameWithoutExtension(imageUrl)}.json");
-                                        File.WriteAllText(outPath, pretty, Encoding.UTF8);
-                                        Console.WriteLine($"Wrote clean JSON to: {outPath}");
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        Console.WriteLine($"Found JSON but failed to parse/serialize it: {ex.Message}");
-                                    }
-                                }
-                                else
-                                {
-                                    Console.WriteLine("No JSON object found in model output.");
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                Console.WriteLine($"Error extracting JSON from completion: {ex.Message}");
-                            }
-
-                            // Cache the serialized completion with reasonable expiration
-                            var cacheEntryOptions = new MemoryCacheEntryOptions
-                            {
-                                AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(7),
-                                SlidingExpiration = TimeSpan.FromHours(24)
-                            };
-
-                            memoryCache.Set(cacheKey, completionJson, cacheEntryOptions);
-                            Console.WriteLine($"Cached result for {imageUrl}");
-
-                            // Print the response
-                            if (completion != null)
-                            {
-                                Console.WriteLine(completionJson);
-                            }
-                            else
-                            {
-                                Console.WriteLine("No response received.");
-                            }
-                        }
+                        // Analyze and report schema extensions
+                        await AnalyzeSchemaExtensions(cleanedJson, timestamp);
                     }
-                    catch (Exception ex)
+                    else
                     {
-                        Console.WriteLine($"An error occurred: {ex.Message}");
+                        Console.WriteLine("No valid JSON found after cleaning.");
                     }
                 }
                 else
                 {
-                    Console.WriteLine("No contents found in extraction result.");
+                    Console.WriteLine("No JSON object found in model output.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error extracting/saving final JSON: {ex.Message}");
+            }
+        }
+
+        // Analyze extracted JSON to identify fields not in base schema
+        private static async Task AnalyzeSchemaExtensions(string extractedJson, string timestamp)
+        {
+            try
+            {
+                Console.WriteLine("\n=== Analyzing Schema Extensions ===");
+
+                // Load base schema
+                string schemaText = File.ReadAllText("E:\\Sudhir\\Prj\\files\\zip\\src\\invoice_schema - Copy.json");
+                var baseSchema = JsonNode.Parse(schemaText);
+                var extractedData = JsonNode.Parse(extractedJson);
+
+                var extensions = new List<string>();
+                FindExtensions(baseSchema, extractedData, "", extensions);
+
+                if (extensions.Count > 0)
+                {
+                    Console.WriteLine($"Found {extensions.Count} extended fields not in base schema:");
+
+                    var extensionsReport = new StringBuilder();
+                    extensionsReport.AppendLine("# Schema Extensions Report");
+                    extensionsReport.AppendLine($"Generated: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC");
+                    extensionsReport.AppendLine($"\nTotal Extended Fields: {extensions.Count}");
+                    extensionsReport.AppendLine("\n## Extended Fields:");
+                    extensionsReport.AppendLine("```");
+
+                    foreach (var ext in extensions.OrderBy(e => e))
+                    {
+                        Console.WriteLine($"  + {ext}");
+                        extensionsReport.AppendLine($"  + {ext}");
+                    }
+
+                    extensionsReport.AppendLine("```");
+                    extensionsReport.AppendLine("\n## Recommendations:");
+                    extensionsReport.AppendLine("Consider updating the base schema to include frequently occurring extended fields.");
+
+                    // Save extensions report
+                    var reportPath = Path.Combine(OutputDirectory, $"schema_extensions_{timestamp}.md");
+                    File.WriteAllText(reportPath, extensionsReport.ToString(), Encoding.UTF8);
+                    Console.WriteLine($"\nSaved schema extensions report to: {reportPath}");
+                }
+                else
+                {
+                    Console.WriteLine("No schema extensions detected. All fields match base schema.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error analyzing schema extensions: {ex.Message}");
+            }
+        }
+
+        // Recursively find fields in extracted data that don't exist in base schema
+        private static void FindExtensions(JsonNode baseNode, JsonNode extractedNode, string path, List<string> extensions)
+        {
+            if (extractedNode == null) return;
+
+            if (extractedNode is JsonObject extractedObj)
+            {
+                var baseObj = baseNode as JsonObject;
+
+                foreach (var kvp in extractedObj)
+                {
+                    var fieldPath = string.IsNullOrEmpty(path) ? kvp.Key : $"{path}.{kvp.Key}";
+
+                    // Check if this field exists in base schema
+                    if (baseObj == null || !baseObj.ContainsKey(kvp.Key))
+                    {
+                        // Field not in base schema - this is an extension
+                        var valueType = GetJsonValueType(kvp.Value);
+                        extensions.Add($"{fieldPath} : {valueType}");
+                    }
+                    else
+                    {
+                        // Field exists in base, recurse to check nested fields
+                        FindExtensions(baseObj[kvp.Key], kvp.Value, fieldPath, extensions);
+                    }
+                }
+            }
+            else if (extractedNode is JsonArray extractedArr && baseNode is JsonArray baseArr)
+            {
+                // For arrays, check the first element if exists
+                if (extractedArr.Count > 0 && baseArr.Count > 0)
+                {
+                    FindExtensions(baseArr[0], extractedArr[0], path + "[0]", extensions);
                 }
             }
         }
 
-        // Helper: compute stable cache key from messages + options + imageUrl
-        private static string ComputeCacheKey(IList<OpenAI.Chat.ChatMessage> messages, ChatCompletionOptions options, string imageUrl)
+        // Get JSON value type as string
+        private static string GetJsonValueType(JsonNode node)
+        {
+            if (node == null) return "null";
+            if (node is JsonValue jv)
+            {
+                var value = jv.ToString();
+                // Try to infer type
+                if (bool.TryParse(value, out _)) return "boolean";
+                if (int.TryParse(value, out _)) return "number";
+                if (decimal.TryParse(value, out _)) return "number";
+                if (DateTime.TryParse(value, out _)) return "date/string";
+                return "string";
+            }
+            if (node is JsonObject) return "object";
+            if (node is JsonArray) return "array";
+            return "unknown";
+        }
+
+        // Extract model text from JsonElement (deserialized completion)
+        private static string ExtractModelTextFromJson(JsonElement completion)
         {
             var sb = new StringBuilder();
-            // include imageUrl to differentiate cache for each URL
-            sb.Append($"url:{imageUrl};");
-            // include options that affect the output
+
+            // Try to read "Content" property
+            if (completion.TryGetProperty("Content", out var contentProp) || completion.TryGetProperty("content", out contentProp))
+            {
+                if (contentProp.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var part in contentProp.EnumerateArray())
+                    {
+                        if (part.TryGetProperty("Text", out var textProp) || part.TryGetProperty("text", out textProp))
+                        {
+                            sb.AppendLine(textProp.GetString());
+                        }
+                    }
+                }
+                else if (contentProp.ValueKind == JsonValueKind.String)
+                {
+                    sb.AppendLine(contentProp.GetString());
+                }
+            }
+
+            // Try "Choices" property
+            if (completion.TryGetProperty("Choices", out var choicesProp) || completion.TryGetProperty("choices", out choicesProp))
+            {
+                if (choicesProp.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var choice in choicesProp.EnumerateArray())
+                    {
+                        if (choice.TryGetProperty("Message", out var msgProp) || choice.TryGetProperty("message", out msgProp))
+                        {
+                            if (msgProp.TryGetProperty("Content", out var msgContent) || msgProp.TryGetProperty("content", out msgContent))
+                            {
+                                sb.AppendLine(msgContent.GetString());
+                            }
+                        }
+                        else if (choice.TryGetProperty("Text", out var textProp) || choice.TryGetProperty("text", out textProp))
+                        {
+                            sb.AppendLine(textProp.GetString());
+                        }
+                    }
+                }
+            }
+
+            return sb.ToString();
+        }
+
+        // Helper: compute stable cache key from messages + options + identifier
+        private static string ComputeCacheKey(IList<OpenAI.Chat.ChatMessage> messages, ChatCompletionOptions options, string identifier)
+        {
+            var sb = new StringBuilder();
+            sb.Append($"id:{identifier};");
             sb.Append($"temp:{options.Temperature};maxTokens:{options.MaxOutputTokenCount};topP:{options.TopP};freq:{options.FrequencyPenalty};pres:{options.PresencePenalty};");
+
             foreach (var m in messages)
             {
-                // Role and content via reflection to avoid compile-time dependency on SDK internal shape
                 var t = m.GetType();
                 string role = "";
                 string content = "";
@@ -266,7 +647,6 @@ namespace ImageTextExtractorApp
                 }
                 else
                 {
-                    // fallback to ToString()
                     content = m.ToString() ?? "";
                 }
 
@@ -280,13 +660,22 @@ namespace ImageTextExtractorApp
             return Convert.ToHexString(hash);
         }
 
-        // Extract model text from completion via reflection, and extract/clean JSON from it and save to file
+        // Simple cache key for OCR results
+        private static string ComputeSimpleCacheKey(string input)
+        {
+            using var sha = SHA256.Create();
+            var bytes = Encoding.UTF8.GetBytes(input);
+            var hash = sha.ComputeHash(bytes);
+            return Convert.ToHexString(hash);
+        }
+
+        // Extract model text from completion via reflection (kept for backward compatibility)
         private static string ExtractModelText(object completion)
         {
             if (completion == null) return string.Empty;
             var t = completion.GetType();
 
-            // First, try to read a top-level 'Content' collection (seen on OpenAI.Chat.ChatCompletion)
+            // First, try to read a top-level 'Content' collection
             var topContentProp = t.GetProperty("Content") ?? t.GetProperty("content");
             if (topContentProp != null)
             {
@@ -306,27 +695,10 @@ namespace ImageTextExtractorApp
                         }
                         else
                         {
-                            // fallback: ToString()
                             sbTop.AppendLine(part.ToString() ?? string.Empty);
                         }
                     }
-
-                    var collected = sbTop.ToString();
-                    // attempt to extract JSON and save
-                    var jsonObjectsTop = ExtractJsonObjects(collected);
-                    if (jsonObjectsTop.Count > 0)
-                    {
-                        try
-                        {
-                            CleanAndSaveJson(jsonObjectsTop);
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"Failed to clean/save JSON from top-level Content: {ex.Message}");
-                        }
-                    }
-
-                    return collected;
+                    return sbTop.ToString();
                 }
             }
 
@@ -342,7 +714,6 @@ namespace ImageTextExtractorApp
                     {
                         if (choice == null) continue;
                         var ct = choice.GetType();
-                        // choice may have a "Message" property or "Text"
                         var messageObj = ct.GetProperty("Message")?.GetValue(choice) ?? ct.GetProperty("message")?.GetValue(choice);
                         if (messageObj != null)
                         {
@@ -356,29 +727,10 @@ namespace ImageTextExtractorApp
                             if (text != null) sb.AppendLine(text.ToString());
                         }
                     }
-
-                    var fullText = sb.ToString();
-
-                    // Try to extract JSON objects/arrays from the assembled text
-                    var jsonObjects = ExtractJsonObjects(fullText);
-                    if (jsonObjects.Count > 0)
-                    {
-                        try
-                        {
-                            // Clean and save each found JSON (writes first cleaned JSON to file)
-                            CleanAndSaveJson(jsonObjects);
-                        }
-                        catch (Exception ex)
-                        {
-                            Console.WriteLine($"Failed to clean/save JSON from completion: {ex.Message}");
-                        }
-                    }
-
-                    return fullText;
+                    return sb.ToString();
                 }
             }
 
-            // fallback to ToString()
             return completion.ToString() ?? string.Empty;
         }
 
@@ -404,12 +756,11 @@ namespace ImageTextExtractorApp
                         if (depth == 0)
                         {
                             var candidate = text.Substring(start, j - start + 1);
-                            // quick validation: try parse
                             try
                             {
                                 JsonNode.Parse(candidate);
                                 results.Add(candidate);
-                                i = j; // advance outer loop
+                                i = j;
                                 break;
                             }
                             catch
@@ -473,7 +824,6 @@ namespace ImageTextExtractorApp
                 foreach (var it in newItems) arr.Add(it);
                 return arr.Count > 0;
             }
-            // JsonValue
             if (node is JsonValue val)
             {
                 var s = val.ToString();
@@ -482,10 +832,11 @@ namespace ImageTextExtractorApp
             return false;
         }
 
-        private static void CleanAndSaveJson(List<string> jsonStrings)
+        // Clean and return JSON as string (instead of saving to file)
+        private static string CleanAndReturnJson(List<string> jsonStrings)
         {
-            if (jsonStrings == null || jsonStrings.Count == 0) return;
-            // We'll save the first cleaned JSON object/array found
+            if (jsonStrings == null || jsonStrings.Count == 0) return string.Empty;
+
             for (int i = 0; i < jsonStrings.Count; i++)
             {
                 var candidate = jsonStrings[i];
@@ -496,23 +847,40 @@ namespace ImageTextExtractorApp
 
                     // Clean the node
                     var keep = CleanJsonNode(node);
-                    if (!keep) continue; // nothing useful after cleaning
+                    if (!keep) continue;
 
-                    // Pretty-print and save
+                    // Pretty-print and return
                     var pretty = JsonSerializer.Serialize(node, new JsonSerializerOptions { WriteIndented = true });
-                    var filename = $"cleaned_output_{DateTime.UtcNow:yyyyMMddHHmmssfff}.json";
-                    var outPath = Path.Combine(Directory.GetCurrentDirectory(), filename);
-                    File.WriteAllText(outPath, pretty, Encoding.UTF8);
-                    Console.WriteLine($"Wrote cleaned JSON to: {outPath}");
-                    return;
+                    return pretty;
                 }
                 catch (Exception ex)
                 {
-                    // ignore and try next
                     Console.WriteLine($"Candidate JSON parse failed: {ex.Message}");
                 }
             }
+
+            return string.Empty;
         }
+
+        // Legacy method kept for compatibility (now calls CleanAndReturnJson internally)
+        private static void CleanAndSaveJson(List<string> jsonStrings)
+        {
+            var cleanedJson = CleanAndReturnJson(jsonStrings);
+            if (!string.IsNullOrEmpty(cleanedJson))
+            {
+                var filename = $"cleaned_output_{DateTime.UtcNow:yyyyMMddHHmmssfff}.json";
+                var outPath = Path.Combine(OutputDirectory, filename);
+                File.WriteAllText(outPath, cleanedJson, Encoding.UTF8);
+                Console.WriteLine($"Wrote cleaned JSON to: {outPath}");
+            }
+        }
+    }
+
+    // Helper class to store OCR results
+    class OcrResult
+    {
+        public string ImageUrl { get; set; }
+        public string Markdown { get; set; }
     }
 
     // Model for the extraction operation response

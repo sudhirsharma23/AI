@@ -8,37 +8,39 @@
         "lastName": "string",
         "firstName": "string",
         "email": "string",
-        "camaUsername": "number"
+        "camaUsername": "string"
       },
       "saleData": {
         "partially_worked_flag": "boolean",
-        "notary_date": "YYYY-MM-DD",
+        "notary_date": "date",
         "buyer_names_component": [
           {
             "sourceId": "string",
             "buyerVesting": "string",
             "lastName": "string",
             "firstName": "string",
-            "buyerFirstName": "string",
             "buyerMiddleName": "string",
+            "buyerFirstName": "string",
             "externalId": "string",
             "ownerCategory": "string",
             "buyerIsPrimary": "boolean",
             "buyerPercentage": "number",
             "id": "number",
-            "buyerLastName": "string"
+            "buyerLastName": "string",
+            "ownerCategory": "string",
+            "uuid": "string"
           }
         ],
-        "cos_date": "string",
+        "cos_date": "date",
         "deed_transfer_type": "string",
-        "partial_interest_flag": "string",
+        "partial_interest_flag": "boolean",
         "reassessability_type": "string",
-        "docstamp_amount": "string",
-        "cos_price": "string",
+        "docstamp_amount": "number",
+        "cos_price": "number",
         "conveyance": "string",
         "document_source_id": "string",
-        "recorded_date": "string",
-        "effective_date": "string",
+        "recorded_date": "date",
+        "effective_date": "date",
         "buyer_address_component": {
           "addressCategory": "string",
           "buyerCity": "string",
@@ -46,79 +48,94 @@
           "id": "number",
           "buyerStateUS": "string",
           "buyerAddressStreetNumber1": "string",
-          "buyerAddressStandard": "string",
-          "buyerAddressStreetSuffix": "string"
+          "buyerAddressStandard": "string"
         },
-        "exemptions_flag": "string",
+        "exemptions_flag": "boolean",
         "granting_type": "string",
         "parcel_vesting": "string",
+        "transfer_information": {
+          "change_in_ownership_or_control": "string",
+          "transfer_of_interest_in_real_property": "string",
+          "property_purchased_from_or_exchanged_with_related_person": "string",
+          "property_received_as_gift_or_inheritance": "string",
+          "transfer_solely_between_spouses": "string",
+          "transfer_into_trust": "string",
+          "transfer_from_trust": "string",
+          "transfer_by_legal_entity": "string",
+          "creation_of_lease": "string",
+          "assignment_or_sublease": "string",
+          "termination_of_lease": "string",
+          "replacement_of_property_under_eminent_domain": "string",
+          "transfer_of_property_to_governmental_entity": "string",
+          "exclusion_under_revenue_and_taxation_code": "string",
+          "other_reason_property_not_subject_to_reappraisal": "string",
+          "recorded_document_type": "string",
+          "assessor_parcel_number": "string",
+          "additional_transfer_information_notes": "string"
+        },
         "land_records_from_document": [
           {
-            "version": "string",
-            "createdAt": "string",
-            "updatedAt": "string",
+            "version": "number",
+            "createdAt": "number",
+            "updatedAt": "number",
             "id": "number",
-            "jurisdictionId": "string",
-            "deleted": "string",
-            "active": "string",
+            "jurisdictionId": "number",
+            "deleted": "boolean",
+            "active": "boolean",
             "sourceId": "string",
             "parcelNumber": "string",
-            "parcelSize": "string",
-            "assessedValueTotal": "string",
-            "assessedValueLand": "string",
-            "assessedValueImprovements": "string",
-            "region": "string",
-            "neighborhood": "string",
-            "subdivision": "string",
+            "parcelSize": "",
+            "assessedValueTotal": "",
+            "assessedValueLand": "",
+            "assessedValueImprovements": "",
+            "region": "",
+            "neighborhood": "",
+            "subdivision": "",
             "propertyStreet": "string",
             "propertyCity": "string",
             "propertyState": "string",
-            "propertyZip": "string",
-            "propertyUseCode": "string",
-            "propertyUseDescription": "string",
-            "propertyCategory": "string",
+            "propertyZip": "",
+            "propertyUseCode": "",
+            "propertyUseDescription": "",
+            "propertyCategory": "",
             "customFields": {
               "cama_sale_history_notes": "string",
               "cama_parcel_legal_description": "string",
               "cama_parcel_extended_legal_description": "string"
             },
-            "components": "string",
-            "permits": "string",
-            "exemptions": "string",
-            "landDetails": "string",
-            "improvementDetails": "string",
-            "propertyValues": "string",
-            "errors": "string",
-            "specialAssessments": "string",
-            "landRecordLocationIds": [],
-            "propertyUseCategory": "string",
-            "sourceIdSynthetic": "string"
+            "components": "",
+            "permits": "",
+            "exemptions": "",
+            "landDetails": "",
+            "improvementDetails": "",
+            "propertyValues": "",
+            "errors": "",
+            "specialAssessments": "",
+            "landRecordLocationIds": [ "" ],
+            "propertyUseCategory": "",
+            "sourceIdSynthetic": "boolean"
           }
         ],
         "parcel_match_cards_component": {
           "mainParcels": [
             {
-              "sourceId": "number",
+              "sourceId": "string",
               "propertyStreet": "string",
               "ownerAddresses": [
                 {
                   "sourceId": "string",
-                  "zipCode": "number",
+                  "zipCode": "string",
                   "city": "string",
                   "addressLine1": "string"
                 }
               ],
-              "ownerSourceIds": [
-                "string"
-              ],
+              "ownerSourceIds": [ "string" ],
               "propertyState": "string",
-              "ownerNames": [
-                "string"
-              ],
+              "ownerNames": [ "string" ],
               "oldOwners": [
                 {
                   "sourceId": "string",
-                  "zipCode": "number",
+                  "zipCode": "string",
                   "lastName": "string",
                   "titleType": "string",
                   "sequenceNumber": "number",
@@ -127,12 +144,12 @@
                     "owner_full_name": "string",
                     "owner_reassessability_type_name": "string",
                     "owner_assessee_vesting_type_name": "string",
-                    "owner_base_effective_date": "YYYY-MM-DD",
-                    "owner_base_year": "number",
-                    "owner_date_acquired": "YYYY-MM-DD"
+                    "owner_base_effective_date": "date",
+                    "owner_base_year": "string",
+                    "owner_date_acquired": "date"
                   },
                   "setNumber": "number",
-                  "originalGrantingDocumentNumber": "number",
+                  "originalGrantingDocumentNumber": "string",
                   "principal": "boolean",
                   "firstName": "string",
                   "percentage": "number",
@@ -143,18 +160,16 @@
               "legalDescription": "string",
               "propertyCity": "string",
               "matchScore": "number",
-              "parcelNumber": "number",
-              "newOwners": [],
-              "ownerTypes": [
-                "null"
-              ],
+              "parcelNumber": "string",
+              "newOwners": [ "" ],
+              "ownerTypes": [ "" ],
               "id": "number"
             }
           ],
-          "potentialMatchParcels": [
-          ]
+          "potentialMatchParcels": [ "" ]
         },
         "sale_instrument": "string",
+        "terminate_prior_owner_exemption_flag": "boolean",
         "process_owners_from_parcel_match_cards_component_flag": "boolean"
       }
     }

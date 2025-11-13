@@ -9,6 +9,10 @@ x86/
 [Aa]rm64/
 bld/
 
+# Published output folders
+published/
+**/published/
+
 # Secrets and Configuration Files - SECURITY CRITICAL
 appsettings.Development.json
 appsettings.*.json

@@ -1,0 +1,43 @@
+{
+  // ============================================================
+  // MCP Server Configuration for VS Code / GitHub Copilot
+  // ============================================================
+  // 
+  // How to use:
+  // 1. Copy the content below
+  // 2. In VS Code: Ctrl+Shift+P ? "Preferences: Open User Settings (JSON)"
+  // 3. Paste into your settings.json file
+  // 4. Save and restart VS Code
+  // 5. Open Copilot Chat and type: @aws-textract-processor
+  //
+  // ============================================================
+
+  "github.copilot.chat.mcpServers": {
+    "aws-textract-processor": {
+   "command": "dotnet",
+      "args": [
+   "run",
+   "--project",
+        "E:\\Sudhir\\GitRepo\\AWSTextract\\MCPServer\\MCPServer.csproj",
+   "--",
+        "--mcp"
+      ],
+      "description": "AWS Textract and Bedrock document processing server",
+      "env": {
+        "AWS_REGION": "us-west-2",
+        "LOG_LEVEL": "INFO"
+      }
+    }
+  },
+
+  // ============================================================
+  // Optional: Copilot Settings
+  // ============================================================
+  
+  "github.copilot.enable": {
+    "*": true,
+    "plaintext": false,
+    "markdown": true,
+    "scminput": false
+  }
+}
