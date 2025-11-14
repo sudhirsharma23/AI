@@ -1,0 +1,49 @@
+{
+  "title": "Two Owners - 50% Each (Husband and Wife)",
+  "input": "GRANT DEED from CHARLES D. SHAPIRO AND SUZANNE D. SHAPIRO, HUSBAND AND WIFE AS JOINT TENANTS to CHARLES DAVID SHAPIRO AND SUZANNE DENISE SHAPIRO, AS CO-TRUSTEES OF THE SHAPIRO FAMILY TRUST",
+  "expectedOutput": {
+    "buyer_names_component": [
+      {
+        "firstName": "Charles",
+        "middleName": "David",
+        "lastName": "Shapiro",
+        "buyerVesting": "AS CO-TRUSTEES OF THE SHAPIRO FAMILY TRUST",
+        "buyerPercentage": 50,
+        "buyerIsPrimary": true
+      },
+      {
+        "firstName": "Suzanne",
+        "middleName": "Denise",
+        "lastName": "Shapiro",
+        "buyerVesting": "AS CO-TRUSTEES OF THE SHAPIRO FAMILY TRUST",
+        "buyerPercentage": 50,
+        "buyerIsPrimary": false
+      }
+    ],
+    "oldOwners": [
+      {
+        "firstName": "Charles",
+        "middleName": "D.",
+        "lastName": "Shapiro",
+        "percentage": 50,
+        "principal": true,
+        "titleType": "HUSBAND AND WIFE AS JOINT TENANTS",
+        "customFields": {
+          "owner_full_name": "CHARLES D. SHAPIRO"
+        }
+      },
+      {
+        "firstName": "Suzanne",
+        "middleName": "D.",
+        "lastName": "Shapiro",
+        "percentage": 50,
+        "principal": false,
+        "titleType": "HUSBAND AND WIFE AS JOINT TENANTS",
+        "customFields": {
+          "owner_full_name": "SUZANNE D. SHAPIRO"
+        }
+      }
+    ]
+  },
+  "explanation": "Two owners split ownership 50/50. The word 'AND' between names ALWAYS means separate people. Must create TWO separate entries, not one combined entry."
+}

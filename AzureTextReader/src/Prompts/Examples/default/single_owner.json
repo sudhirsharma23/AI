@@ -1,0 +1,27 @@
+{
+  "title": "Single Owner - 100% Ownership",
+  "input": "GRANT DEED from County Recorder to JOHN SMITH, AN INDIVIDUAL. Property located at 123 Main Street.",
+  "expectedOutput": {
+    "buyer_names_component": [
+      {
+        "firstName": "John",
+        "lastName": "Smith",
+        "buyerVesting": "AN INDIVIDUAL",
+        "buyerPercentage": 100,
+        "buyerIsPrimary": true
+ }
+    ],
+    "oldOwners": [
+      {
+        "firstName": "County",
+"lastName": "Recorder",
+        "percentage": 100,
+        "principal": true,
+        "customFields": {
+          "owner_full_name": "County Recorder"
+        }
+      }
+    ]
+  },
+  "explanation": "Single owner receives 100% ownership, NOT 50%. This is the most common error - defaulting to 50% for a single owner."
+}

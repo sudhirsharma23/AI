@@ -38,8 +38,8 @@ namespace TextractProcessor
         private const string UploadDate = "2025-11-10"; // Change this to match your upload date
         private static readonly string[] DocumentKeys = new[]
         {
-            $"uploads/{UploadDate}/2025000065659/2025000065659.tif",
-            $"uploads/{UploadDate}/2025000065659-1/2025000065659-1.tif"
+            $"uploads/{UploadDate}/2025000065660/2025000065660.tif",
+            $"uploads/{UploadDate}/2025000065660-1/2025000065660-1.tif"
         };
 
         private const int MaxRetries = 60;
