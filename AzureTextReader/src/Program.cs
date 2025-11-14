@@ -172,63 +172,74 @@ namespace ImageTextExtractorApp
             var credential = new ApiKeyCredential(subscriptionKey);
             var azureClient = new AzureOpenAIClient(new Uri(config.Endpoint), credential);
 
-            // Load JSON schema
-            string schemaText = File.ReadAllText("E:\\Sudhir\\Prj\\files\\zip\\src\\invoice_schema - Copy.json");
-            JsonNode jsonSchema = JsonNode.Parse(schemaText);
-
             // Initialize the ChatClient with the specified deployment name
             ChatClient chatClient = azureClient.GetChatClient("gpt-4o-mini");
 
-            // NEW: Initialize PromptService
-            Console.WriteLine("Building prompt from templates...");
-            var promptService = new PromptService(memoryCache);
+            // Process with BOTH versions for comparison
+            Console.WriteLine("\n--- Version 1: Schema-Based Extraction ---");
+            await ProcessVersion1(memoryCache, chatClient, combinedMarkdown, timestamp);
 
-            // Build complete prompt using PromptService
-            var builtPrompt = await promptService.BuildCompletePromptAsync(new PromptRequest
-            {
-                TemplateType = "deed_extraction",
-                Version = "v1",
-                IncludeExamples = true,
-                ExampleSet = "default",
-                IncludeRules = true,
-                RuleNames = new List<string> { "percentage_calculation", "name_parsing", "date_format" },
-                SchemaJson = jsonSchema.ToJsonString(),
-                SourceData = combinedMarkdown
-            });
+            Console.WriteLine("\n--- Version 2: Dynamic Extraction (No Schema) ---");
+            await ProcessVersion2(memoryCache, chatClient, combinedMarkdown, timestamp);
+        }
 
-            Console.WriteLine($"Prompt built successfully (System: {builtPrompt.SystemMessage.Length} chars, User: {builtPrompt.UserMessage.Length} chars)");
-
-            // Create messages using built prompt
-            var messages = new List<OpenAI.Chat.ChatMessage>
+        // VERSION 1: Schema-based extraction (existing logic)
+        private static async Task ProcessVersion1(IMemoryCache memoryCache, ChatClient chatClient, string combinedMarkdown, string timestamp)
         {
-            new SystemChatMessage(builtPrompt.SystemMessage),
-      new UserChatMessage(builtPrompt.UserMessage)
- };
-
-            // Create chat completion options
-            var options = new ChatCompletionOptions
-            {
-                Temperature = (float)0.7,
-                MaxOutputTokenCount = 13107,
-                TopP = (float)0.95,
-                FrequencyPenalty = (float)0,
-                PresencePenalty = (float)0,
-            };
-
             try
             {
+                // Load JSON schema
+                string schemaText = File.ReadAllText("E:\\Sudhir\\Prj\\files\\zip\\src\\invoice_schema - Copy.json");
+                JsonNode jsonSchema = JsonNode.Parse(schemaText);
+
+                // Initialize PromptService
+                Console.WriteLine("Building V1 prompt from templates (with schema)...");
+                var promptService = new PromptService(memoryCache);
+
+                // Build complete prompt using PromptService
+                var builtPrompt = await promptService.BuildCompletePromptAsync(new PromptRequest
+                {
+                    TemplateType = "deed_extraction",
+                    Version = "v1",
+                    IncludeExamples = true,
+                    ExampleSet = "default",
+                    IncludeRules = true,
+                    RuleNames = new List<string> { "percentage_calculation", "name_parsing", "date_format" },
+                    SchemaJson = jsonSchema.ToJsonString(),
+                    SourceData = combinedMarkdown
+                });
+
+                Console.WriteLine($"V1 Prompt built successfully (System: {builtPrompt.SystemMessage.Length} chars, User: {builtPrompt.UserMessage.Length} chars)");
+
+                // Create messages using built prompt
+                var messages = new List<OpenAI.Chat.ChatMessage>
+                {
+                    new SystemChatMessage(builtPrompt.SystemMessage),
+                    new UserChatMessage(builtPrompt.UserMessage)
+                };
+
+                // Create chat completion options
+                var options = new ChatCompletionOptions
+                {
+                    Temperature = (float)0.7,
+                    MaxOutputTokenCount = 13107,
+                    TopP = (float)0.95,
+                    FrequencyPenalty = (float)0,
+                    PresencePenalty = (float)0,
+                };
+
                 // Compute a cache key for this combination of messages + options
-                var cacheKey = ComputeCacheKey(messages, options, "combined_documents");
+                var cacheKey = ComputeCacheKey(messages, options, "v1_combined_documents");
 
                 // Try to pull cached response
                 if (memoryCache.TryGetValue(cacheKey, out var cachedObj) && cachedObj is string cachedJson)
                 {
-                    Console.WriteLine($"Cache hit for ChatCompletion - using cached response.");
-                    await SaveFinalCleanedJson(cachedJson, timestamp);
+                    Console.WriteLine($"Cache hit for V1 ChatCompletion - using cached response.");
+                    await SaveFinalCleanedJson(cachedJson, timestamp, "_v1_schema");
                 }
                 else
                 {
-                    Console.WriteLine($"Cache miss - Calling ChatClient.CompleteChat...");
+                    Console.WriteLine($"Cache miss - Calling ChatClient.CompleteChat for V1...");
                     // Create the chat completion request
                     ChatCompletion completion = chatClient.CompleteChat(messages, options);
 
@@ -243,21 +254,109 @@ namespace ImageTextExtractorApp
                     };
 
                     memoryCache.Set(cacheKey, completionJson, cacheEntryOptions);
-                    Console.WriteLine($"Cached ChatCompletion result");
+                    Console.WriteLine($"Cached V1 ChatCompletion result");
 
                     // Extract and save the final cleaned JSON
-                    await SaveFinalCleanedJson(completionJson, timestamp);
+                    await SaveFinalCleanedJson(completionJson, timestamp, "_v1_schema");
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"An error occurred during ChatCompletion: {ex.Message}");
+                Console.WriteLine($"An error occurred during V1 ChatCompletion: {ex.Message}");
                 Console.WriteLine($"Stack trace: {ex.StackTrace}");
             }
         }
 
-        // Save the final cleaned JSON output
-        private static async Task SaveFinalCleanedJson(string completionJson, string timestamp)
+        // VERSION 2: Dynamic extraction (no schema, purely from OCR)
+        private static async Task ProcessVersion2(IMemoryCache memoryCache, ChatClient chatClient, string combinedMarkdown, string timestamp)
+        {
+            try
+            {
+                // Initialize PromptService for V2
+                Console.WriteLine("Building V2 prompt from templates (dynamic, no schema)...");
+                var promptService = new PromptService(memoryCache);
+
+                // Build V2 prompt - NO schema, NO examples, NO rules - pure dynamic extraction
+                var builtPrompt = await promptService.BuildCompletePromptAsync(new PromptRequest
+                {
+                    TemplateType = "deed_extraction",
+                    Version = "v2",
+                    IncludeExamples = false,  // No examples for dynamic extraction
+                    IncludeRules = false,     // No rules, let AI figure it out
+                    RuleNames = new List<string>(),
+                    SchemaJson = "",     // NO SCHEMA!
+                    SourceData = combinedMarkdown,
+                    UserMessageTemplate = "Analyze the documents below and extract ALL relevant information dynamically. Focus on:\n" +
+                                         "- Buyer information (names, addresses, percentages, details)\n" +
+                                         "- Seller information (old owners)\n" +
+                                         "- Property details (address, legal description, parcel info)\n" +
+                                         "- Land records information\n" +
+                                         "- Transaction details\n" +
+                                         "- PCOR information (if present)\n\n" +
+                                         "Return a comprehensive JSON with all findings.\n\n" +
+                                         $"DOCUMENTS:\n\n{combinedMarkdown}"
+                });
+
+                Console.WriteLine($"V2 Prompt built successfully (System: {builtPrompt.SystemMessage.Length} chars, User: {builtPrompt.UserMessage.Length} chars)");
+
+                // Create messages using built prompt
+                var messages = new List<OpenAI.Chat.ChatMessage>
+                {
+                    new SystemChatMessage(builtPrompt.SystemMessage),
+                    new UserChatMessage(builtPrompt.UserMessage)
+                };
+
+                // Create chat completion options
+                var options = new ChatCompletionOptions
+                {
+                    Temperature = (float)0.7,
+                    MaxOutputTokenCount = 13107,
+                    TopP = (float)0.95,
+                    FrequencyPenalty = (float)0,
+                    PresencePenalty = (float)0,
+                };
+
+                // Compute a cache key for V2
+                var cacheKey = ComputeCacheKey(messages, options, "v2_dynamic_documents");
+
+                // Try to pull cached response
+                if (memoryCache.TryGetValue(cacheKey, out var cachedObj) && cachedObj is string cachedJson)
+                {
+                    Console.WriteLine($"Cache hit for V2 ChatCompletion - using cached response.");
+                    await SaveFinalCleanedJson(cachedJson, timestamp, "_v2_dynamic");
+                }
+                else
+                {
+                    Console.WriteLine($"Cache miss - Calling ChatClient.CompleteChat for V2...");
+                    // Create the chat completion request
+                    ChatCompletion completion = chatClient.CompleteChat(messages, options);
+
+                    // Serialize the response to JSON for consistent caching / logging
+                    var completionJson = JsonSerializer.Serialize(completion, new JsonSerializerOptions() { WriteIndented = true });
+
+                    // Cache the serialized completion
+                    var cacheEntryOptions = new MemoryCacheEntryOptions
+                    {
+                        AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(7),
+                        SlidingExpiration = TimeSpan.FromHours(24)
+                    };
+
+                    memoryCache.Set(cacheKey, completionJson, cacheEntryOptions);
+                    Console.WriteLine($"Cached V2 ChatCompletion result");
+
+                    // Extract and save the final cleaned JSON
+                    await SaveFinalCleanedJson(completionJson, timestamp, "_v2_dynamic");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"An error occurred during V2 ChatCompletion: {ex.Message}");
+                Console.WriteLine($"Stack trace: {ex.StackTrace}");
+            }
+        }
+
+        // Save the final cleaned JSON output with version suffix
+        private static async Task SaveFinalCleanedJson(string completionJson, string timestamp, string versionSuffix = "")
         {
             try
             {
@@ -283,12 +382,20 @@ namespace ImageTextExtractorApp
 
                     if (!string.IsNullOrEmpty(cleanedJson))
                     {
-                        var finalOutputPath = Path.Combine(OutputDirectory, $"final_output_{timestamp}.json");
+                        var finalOutputPath = Path.Combine(OutputDirectory, $"final_output_{timestamp}{versionSuffix}.json");
                         File.WriteAllText(finalOutputPath, cleanedJson, Encoding.UTF8);
                         Console.WriteLine($"Saved final cleaned JSON to: {finalOutputPath}");
 
-                        // Analyze and report schema extensions
-                        await AnalyzeSchemaExtensions(cleanedJson, timestamp);
+                        // Only analyze schema extensions for V1 (schema-based)
+                        if (versionSuffix.Contains("v1"))
+                        {
+                            await AnalyzeSchemaExtensions(cleanedJson, timestamp);
+                        }
+                        else if (versionSuffix.Contains("v2"))
+                        {
+                            // For V2, create a summary report of what was extracted
+                            await CreateV2ExtractionSummary(cleanedJson, timestamp);
+                        }
                     }
                     else
                     {
@@ -304,6 +411,143 @@ namespace ImageTextExtractorApp
             {
                 Console.WriteLine($"Error extracting/saving final JSON: {ex.Message}");
             }
+        }
+
+        // Create a summary report for V2 dynamic extraction
+        private static async Task CreateV2ExtractionSummary(string extractedJson, string timestamp)
+        {
+            try
+            {
+                Console.WriteLine("\n=== Analyzing V2 Dynamic Extraction ===");
+
+                var extractedData = JsonNode.Parse(extractedJson);
+                var summary = new StringBuilder();
+
+                summary.AppendLine("# V2 Dynamic Extraction Summary");
+                summary.AppendLine($"Generated: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC");
+                summary.AppendLine();
+
+                // Count total fields extracted
+                int totalFields = CountJsonFields(extractedData);
+                summary.AppendLine($"## Statistics");
+                summary.AppendLine($"- Total fields extracted: {totalFields}");
+                summary.AppendLine();
+
+                // Analyze main sections
+                summary.AppendLine("## Sections Extracted:");
+                summary.AppendLine("```");
+
+                if (extractedData is JsonObject obj)
+                {
+                    foreach (var section in obj)
+                    {
+                        var fieldCount = CountJsonFields(section.Value);
+                        summary.AppendLine($"  - {section.Key}: {fieldCount} fields");
+                    }
+                }
+
+                summary.AppendLine("```");
+                summary.AppendLine();
+
+                // Extract key metrics
+                summary.AppendLine("## Key Information:");
+                summary.AppendLine("```");
+
+                try
+                {
+                    // Buyer count
+                    var buyerInfo = extractedData?["buyerInformation"];
+                    if (buyerInfo != null)
+                    {
+                        var totalBuyers = buyerInfo["totalBuyers"]?.ToString() ?? "N/A";
+                        summary.AppendLine($"  - Total Buyers: {totalBuyers}");
+                    }
+
+                    // Seller count
+                    var sellerInfo = extractedData?["sellerInformation"];
+                    if (sellerInfo != null)
+                    {
+                        var totalSellers = sellerInfo["totalSellers"]?.ToString() ?? "N/A";
+                        summary.AppendLine($"  - Total Sellers: {totalSellers}");
+                    }
+
+                    // Property address
+                    var propertyInfo = extractedData?["propertyInformation"];
+                    if (propertyInfo != null)
+                    {
+                        var address = propertyInfo["address"]?["fullAddress"]?.ToString() ?? "N/A";
+                        summary.AppendLine($"  - Property Address: {address}");
+                    }
+
+                    // Transaction amount
+                    var transactionDetails = extractedData?["transactionDetails"];
+                    if (transactionDetails != null)
+                    {
+                        var salePrice = transactionDetails["salePrice"]?.ToString() ?? "N/A";
+                        summary.AppendLine($"  - Sale Price: ${salePrice}");
+                    }
+
+                    // PCOR present?
+                    var pcorInfo = extractedData?["pcorInformation"];
+                    if (pcorInfo != null)
+                    {
+                        var pcorPresent = pcorInfo["documentPresent"]?.ToString() ?? "N/A";
+                        summary.AppendLine($"  - PCOR Document: {pcorPresent}");
+                    }
+                }
+                catch
+                {
+                    summary.AppendLine("  - Could not extract key metrics from structure");
+                }
+
+                summary.AppendLine("```");
+                summary.AppendLine();
+
+                summary.AppendLine("## Comparison Notes:");
+                summary.AppendLine("Compare this V2 output with the V1 schema-based output to see:");
+                summary.AppendLine("- What additional fields were extracted dynamically");
+                summary.AppendLine("- Whether the schema covers all relevant information");
+                summary.AppendLine("- Opportunities to enhance the schema");
+
+                // Save summary report
+                var reportPath = Path.Combine(OutputDirectory, $"v2_extraction_summary_{timestamp}.md");
+                File.WriteAllText(reportPath, summary.ToString(), Encoding.UTF8);
+                Console.WriteLine($"Saved V2 extraction summary to: {reportPath}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error creating V2 summary: {ex.Message}");
+            }
+        }
+
+        // Helper method to count fields in JSON
+        private static int CountJsonFields(JsonNode node)
+        {
+            if (node == null) return 0;
+
+            int count = 0;
+
+            if (node is JsonObject obj)
+            {
+                foreach (var kvp in obj)
+                {
+                    count++; // Count this field
+                    count += CountJsonFields(kvp.Value); // Recursively count nested fields
+                }
+            }
+            else if (node is JsonArray arr)
+            {
+                foreach (var item in arr)
+                {
+                    count += CountJsonFields(item);
+                }
+            }
+            else if (node is JsonValue)
+            {
+                count = 1; // Leaf node
+            }
+
+            return count;
         }
 
         // Analyze extracted JSON to identify fields not in base schema
