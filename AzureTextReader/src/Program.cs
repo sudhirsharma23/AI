@@ -14,6 +14,7 @@ using System.Text.Json.Nodes;
 using System.Reflection;
 using System.IO;
 using ImageTextExtractor.Configuration;
+using ImageTextExtractor.Services;  // Add this for PromptService
 
 namespace ImageTextExtractorApp
 {
@@ -178,193 +179,31 @@ namespace ImageTextExtractorApp
             // Initialize the ChatClient with the specified deployment name
             ChatClient chatClient = azureClient.GetChatClient("gpt-4o-mini");
 
-            // Create a list of chat messages
+            // NEW: Initialize PromptService
+            Console.WriteLine("Building prompt from templates...");
+            var promptService = new PromptService(memoryCache);
+
+            // Build complete prompt using PromptService
+            var builtPrompt = await promptService.BuildCompletePromptAsync(new PromptRequest
+            {
+                TemplateType = "deed_extraction",
+                Version = "v1",
+                IncludeExamples = true,
+                ExampleSet = "default",
+                IncludeRules = true,
+                RuleNames = new List<string> { "percentage_calculation", "name_parsing", "date_format" },
+                SchemaJson = jsonSchema.ToJsonString(),
+                SourceData = combinedMarkdown
+            });
+
+            Console.WriteLine($"Prompt built successfully (System: {builtPrompt.SystemMessage.Length} chars, User: {builtPrompt.UserMessage.Length} chars)");
+
+            // Create messages using built prompt
             var messages = new List<OpenAI.Chat.ChatMessage>
-{
-         new SystemChatMessage(@"You are an intelligent OCR-like data extraction tool that extracts deed and property transaction data from multiple documents, including preliminary change of ownership reports.
-
-DYNAMIC SCHEMA EXTENSION - IMPORTANT:
-You have the ability to EXTEND the provided schema with additional fields found in the documents. Follow these rules:
-
-1. ANALYZE DOCUMENT CONTENT FIRST:
-   - Review ALL text, fields, checkboxes, tables, and sections in the documents
-   - Identify data points that are relevant to property transactions, ownership, and transfers
-   - Look for structured forms, labeled fields, and tabular data
-
-2. EXTEND SCHEMA DYNAMICALLY:
-   If you find relevant data fields NOT in the provided schema:
-   - Add them to the appropriate section (saleData, transfer_information, oldOwners.customFields, etc.)
-   - Use descriptive field names following snake_case convention (e.g., 'property_tax_year', 'document_recording_fee')
-   - Choose appropriate data types: 'string', 'number', 'boolean', 'date', or 'array'
-   - For yes/no checkboxes not in schema, add them to 'transfer_information' as string fields with 'yes'/'no' values
-   - For additional owner-related fields, add them to 'oldOwners[].customFields'
-   - For property-specific details, add them to 'land_records_from_document[].customFields'
-
-3. COMMON FIELDS TO LOOK FOR (add if found but not in base schema):
-   DOCUMENT DETAILS:
-   - document_recording_number, book_number, page_number, instrument_number
-   - filing_date, execution_date, acknowledgment_date
-   - documentary_transfer_tax, recording_fee, total_fees
-   
-   PROPERTY DETAILS:
-   - property_tax_year, property_tax_amount, property_tax_status
-   - zoning_classification, land_use_type, lot_number, block_number
-   - square_footage, acreage, number_of_units
-   - flood_zone, fire_hazard_zone, seismic_zone
-   
-   TRANSFER/TRANSACTION DETAILS:
-   - consideration_amount, cash_consideration, other_consideration
-   - financing_type, loan_amount, lender_name
-   - escrow_number, escrow_company, title_company
-   - real_estate_agent, broker_information
-   
-   OWNER/BUYER DETAILS:
-   - marital_status, citizenship_status
-   - entity_type (for corporations/LLCs), entity_state_of_formation
-   - contact_phone, contact_email
-   - mailing_address_different_from_property
-   
-   LEGAL/COMPLIANCE:
-   - affidavit_of_death (for estate transfers)
-   - court_order_number (for foreclosures/judicial sales)
-   - prop_13_base_year_transfer, prop_19_eligibility
-   - senior_citizen_exemption, disabled_veteran_exemption
-   
-   PRELIMINARY CHANGE OF OWNERSHIP (if checkboxes found):
-   - Any checkbox or yes/no field not listed in the base schema
-   - Section-specific notes or explanations
-   - Signature fields, dates, preparer information
-
-4. FIELD NAMING CONVENTIONS:
-   - Use snake_case: 'property_tax_year' not 'PropertyTaxYear'
-   - Be descriptive: 'document_recording_fee' not just 'fee'
-   - Use prefixes for context: 'buyer_phone_number', 'seller_phone_number'
-   - For dates, include '_date' suffix: 'signature_date', 'notarization_date'
-   - For amounts, include '_amount' suffix: 'transfer_tax_amount', 'exemption_amount'
-
-5. DATA TYPE SELECTION:
-   - Use 'date' for any date field (format YYYY-MM-DD)
-   - Use 'number' for amounts, counts, percentages, IDs
-   - Use 'string' for text, names, addresses, yes/no values
-   - Use 'boolean' for true/false flags
-   - Use 'array' for multiple items (e.g., multiple parcels, multiple exemptions)
-
-CRITICAL INSTRUCTIONS FOR OWNER EXTRACTION:
-
-1. IDENTIFY ALL OWNERS/GRANTORS:
-   - Look for terms like 'Grantor', 'Seller', 'Transferor', 'Owner', or names before phrases like 'convey', 'grant', 'transfer'
-   - Extract EVERY individual owner mentioned in the deed
-   - If multiple owners are listed (e.g., 'John Smith and Jane Smith'), extract each person as a SEPARATE entry in the oldOwners array
-
-2. POPULATE oldOwners ARRAY (NOT buyer_names_component):
-   - The schema uses 'oldOwners' array inside 'parcel_match_cards_component.mainParcels[0].oldOwners'
-   - Each owner must be a separate object in this array
-   - REQUIRED fields for each oldOwner:
-     * lastName: Extract last name
-     * customFields.owner_full_name: Full name of the owner
-     * percentage: Calculate ownership percentage (if 2 owners = 50% each, 3 owners = 33.33% each, 4 owners = 25% each)
-     * principal: Set to true for primary/first owner, false for others
-     * sequenceNumber: 1 for first owner, 2 for second, etc.
-     * setNumber: Usually 1 for all owners in same transaction
-  * addressLine1: Owner's address if available
-     * city: Owner's city
-     * zipCode: Owner's zip code
-     * customFields.owner_date_acquired: Date when owner acquired the property
- * customFields.owner_base_effective_date: Base effective date if available
-   - ADD ADDITIONAL FIELDS to customFields if found in document (e.g., owner_phone_number, owner_email, owner_marital_status)
-
-3. PERCENTAGE CALCULATION RULES:
-   - If 1 owner: percentage = 100
-   - If 2 owners: percentage = 50 for each
-   - If 3 owners: percentage = 33.33 for each (or 33.34 for one to total 100)
-   - If 4 owners: percentage = 25 for each
-   - If 'undivided interest' or specific percentage is mentioned, use that value
-   - Total percentages must equal 100
-
-4. BUYER INFORMATION (NEW OWNERS):
-   - Extract buyers/grantees into 'buyer_names_component' array
-   - Calculate buyerPercentage using same rules as above
-   - ADD ADDITIONAL FIELDS if found in document
-
-5. EXTRACT STANDARD DEED DATA:
-   - Property address and legal description
-   - Sale price or transaction amount (cos_price)
- - Recording date (recorded_date)
-   - Notary date (notary_date)
-   - Document number (document_source_id)
-   - Deed type (deed_transfer_type)
-   - Document stamp amount (docstamp_amount)
-   - PLUS any additional document fields found
-
-6. EXTRACT PRELIMINARY CHANGE OF OWNERSHIP REPORT - TRANSFER INFORMATION:
-   Look for checkboxes or yes/no indicators in the 'Preliminary Change of Ownership Report' section. Extract the following fields into 'transfer_information' object:
-   
-   BASE SCHEMA FIELDS:
-   - change_in_ownership_or_control: 'yes' or 'no'
-   - transfer_of_interest_in_real_property: 'yes' or 'no'
-   - property_purchased_from_or_exchanged_with_related_person: 'yes' or 'no'
-   - property_received_as_gift_or_inheritance: 'yes' or 'no'
-   - transfer_solely_between_spouses: 'yes' or 'no'
-   - transfer_into_trust: 'yes' or 'no'
-   - transfer_from_trust: 'yes' or 'no'
-   - transfer_by_legal_entity: 'yes' or 'no'
-   - creation_of_lease: 'yes' or 'no'
-   - assignment_or_sublease: 'yes' or 'no'
-   - termination_of_lease: 'yes' or 'no'
-   - replacement_of_property_under_eminent_domain: 'yes' or 'no'
-   - transfer_of_property_to_governmental_entity: 'yes' or 'no'
-   - exclusion_under_revenue_and_taxation_code: 'yes' or 'no'
-   - other_reason_property_not_subject_to_reappraisal: 'yes' or 'no'
-   - recorded_document_type: Extract the type
-   - assessor_parcel_number: Extract the APN
-   - additional_transfer_information_notes: Any additional notes
-   
-   ADDITIONAL FIELDS (add if found):
-   - Any other checkboxes or yes/no questions in the report
-   - Preparer name, preparer phone, preparer signature date
-   - Specific code sections referenced (e.g., 'revenue_code_section_62', 'revenue_code_section_63')
-   - Transfer reason details, exemption claim details
-
-7. DATE FORMATTING:
-   - All dates must be in YYYY-MM-DD format
-   - Convert formats like 'January 15, 2025' to '2025-01-15'
-   - Convert '01/15/2025' to '2025-01-15'
-
-8. SCHEMA COMPLIANCE AND EXTENSION:
-   - START with the provided base schema structure
-   - MAINTAIN all existing fields and their data types
-   - ADD new fields found in documents to appropriate sections
-   - Use proper data types for new fields
-   - Include all nested structures correctly
-   - Omit fields if no data is available (don't use null unless schema requires it)
-
-9. OUTPUT FORMAT:
-   - Return valid JSON with both base schema fields AND dynamically added fields
- - Group related extended fields together
-   - Maintain consistent naming and structure
-   - Ensure all added fields have actual values from the document (not placeholders)
-
-Here is the BASE schema to start with (you may extend it): " + $"{jsonSchema}"),
-                new UserChatMessage($@"Please extract and analyze ALL data from the documents below. 
-
-INSTRUCTIONS:
-1. Extract all fields defined in the base schema
-2. Identify ANY additional relevant fields found in the documents that are NOT in the base schema
-3. Add those additional fields to the appropriate sections with proper naming and data types
-4. Pay special attention to:
-   - ALL owners (grantors/sellers) → oldOwners array with correct percentages
-   - ALL buyers (grantees) → buyer_names_component
-   - ALL transfer information checkboxes → transfer_information object
-   - ANY additional document details, fees, dates, references
-   - ANY property-specific information (tax year, zoning, size, etc.)
-   - ANY contact information, legal references, or compliance details
-
-5. Return comprehensive JSON that includes BOTH base schema fields AND any additional fields you discovered
-
-DOCUMENTS:
-
-{combinedMarkdown}")
-         };
+        {
+            new SystemChatMessage(builtPrompt.SystemMessage),
+      new UserChatMessage(builtPrompt.UserMessage)
+ };
 
             // Create chat completion options
             var options = new ChatCompletionOptions
@@ -413,6 +252,7 @@ DOCUMENTS:
             catch (Exception ex)
             {
                 Console.WriteLine($"An error occurred during ChatCompletion: {ex.Message}");
+                Console.WriteLine($"Stack trace: {ex.StackTrace}");
             }
         }
 
