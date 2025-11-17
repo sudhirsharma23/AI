@@ -11,29 +11,29 @@ namespace ImageTextExtractor.Configuration
     public class AzureAIConfig
     {
         public string Endpoint { get; set; }
-     public string SubscriptionKey { get; set; }
+        public string SubscriptionKey { get; set; }
 
         /// <summary>
-   /// Loads configuration from environment variables first, then appsettings.json
+        /// Loads configuration from environment variables first, then appsettings.json
         /// Priority: Environment Variables > User Secrets > appsettings.json
-   /// </summary>
+        /// </summary>
         public static AzureAIConfig Load()
-    {
-          // Try environment variables first (highest priority)
-   var endpoint = Environment.GetEnvironmentVariable("AZURE_AI_ENDPOINT");
-     var key = Environment.GetEnvironmentVariable("AZURE_AI_KEY");
+        {
+            // Try environment variables first (highest priority)
+            var endpoint = Environment.GetEnvironmentVariable("AZURE_AI_ENDPOINT");
+            var key = Environment.GetEnvironmentVariable("AZURE_AI_KEY");
 
-       if (!string.IsNullOrEmpty(endpoint) && !string.IsNullOrEmpty(key))
+            if (!string.IsNullOrEmpty(endpoint) && !string.IsNullOrEmpty(key))
             {
-             Console.WriteLine("? Loaded Azure AI configuration from environment variables");
-           return new AzureAIConfig
-     {
-              Endpoint = endpoint,
-      SubscriptionKey = key
+                Console.WriteLine("? Loaded Azure AI configuration from environment variables");
+                return new AzureAIConfig
+                {
+                    Endpoint = endpoint,
+                    SubscriptionKey = key
                 };
-         }
+            }
 
-   // Fall back to configuration file
+            // Fall back to configuration file
             var builder = new ConfigurationBuilder()
             .SetBasePath(Directory.GetCurrentDirectory())
         .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
@@ -41,11 +41,11 @@ namespace ImageTextExtractor.Configuration
 .AddUserSecrets<AzureAIConfig>(optional: true) // Loads from user secrets if available
          .AddEnvironmentVariables(); // Also check env vars again
 
-         var configuration = builder.Build();
-   var config = configuration.GetSection("AzureAI").Get<AzureAIConfig>();
+            var configuration = builder.Build();
+            var config = configuration.GetSection("AzureAI").Get<AzureAIConfig>();
 
-    if (config == null || string.IsNullOrEmpty(config.Endpoint) || string.IsNullOrEmpty(config.SubscriptionKey))
-  {
+            if (config == null || string.IsNullOrEmpty(config.Endpoint) || string.IsNullOrEmpty(config.SubscriptionKey))
+            {
                 throw new InvalidOperationException(
 "Azure AI configuration not found. Please set either:\n" +
    "1. Environment variables: AZURE_AI_ENDPOINT and AZURE_AI_KEY\n" +
@@ -57,57 +57,57 @@ namespace ImageTextExtractor.Configuration
             }
 
             Console.WriteLine("? Loaded Azure AI configuration from appsettings/user secrets");
-     return config;
-     }
+            return config;
+        }
 
-      /// <summary>
+        /// <summary>
         /// Validates that the configuration is properly loaded
-/// </summary>
+        /// </summary>
         public void Validate()
         {
             if (string.IsNullOrWhiteSpace(Endpoint))
- {
+            {
                 throw new ArgumentException("Azure AI Endpoint is required");
- }
+            }
 
             if (string.IsNullOrWhiteSpace(SubscriptionKey))
-  {
-      throw new ArgumentException("Azure AI Subscription Key is required");
-      }
+            {
+                throw new ArgumentException("Azure AI Subscription Key is required");
+            }
 
-         if (!Endpoint.StartsWith("https://"))
-    {
-      throw new ArgumentException("Azure AI Endpoint must be a valid HTTPS URL");
-  }
+            if (!Endpoint.StartsWith("https://"))
+            {
+                throw new ArgumentException("Azure AI Endpoint must be a valid HTTPS URL");
+            }
 
             Console.WriteLine($"? Azure AI Configuration validated: {Endpoint}");
-}
+        }
     }
 
     /// <summary>
     /// Redis configuration (if needed)
     /// </summary>
- public class RedisConfig
+    public class RedisConfig
     {
-    public string ConnectionString { get; set; }
+        public string ConnectionString { get; set; }
 
         public static RedisConfig Load()
         {
-   var connectionString = Environment.GetEnvironmentVariable("REDIS_CONNECTION_STRING");
+            var connectionString = Environment.GetEnvironmentVariable("REDIS_CONNECTION_STRING");
 
-    if (!string.IsNullOrEmpty(connectionString))
+            if (!string.IsNullOrEmpty(connectionString))
             {
-   return new RedisConfig { ConnectionString = connectionString };
-          }
+                return new RedisConfig { ConnectionString = connectionString };
+            }
 
-     var builder = new ConfigurationBuilder()
-  .SetBasePath(Directory.GetCurrentDirectory())
-         .AddJsonFile("appsettings.json", optional: true)
-           .AddJsonFile("appsettings.Development.json", optional: true)
-        .AddUserSecrets<RedisConfig>(optional: true)
-   .AddEnvironmentVariables();
+            var builder = new ConfigurationBuilder()
+         .SetBasePath(Directory.GetCurrentDirectory())
+                .AddJsonFile("appsettings.json", optional: true)
+                  .AddJsonFile("appsettings.Development.json", optional: true)
+               .AddUserSecrets<RedisConfig>(optional: true)
+          .AddEnvironmentVariables();
 
- var configuration = builder.Build();
+            var configuration = builder.Build();
             return configuration.GetSection("Redis").Get<RedisConfig>();
         }
     }
