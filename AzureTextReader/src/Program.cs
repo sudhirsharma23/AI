@@ -151,7 +151,7 @@ namespace ImageTextExtractorApp
             try
             {
                 // Load JSON schema
-                string schemaText = File.ReadAllText("E:\\Sudhir\\Prj\\files\\zip\\src\\invoice_schema - Copy.json");
+                string schemaText = File.ReadAllText("E:\\Sudhir\\Prj\\files\\zip\\src\\invoice_schema.json");
                 JsonNode jsonSchema = JsonNode.Parse(schemaText);
 
                 // Initialize PromptService
@@ -506,7 +506,7 @@ namespace ImageTextExtractorApp
                 Console.WriteLine("\n=== Analyzing Schema Extensions ===");
 
                 // Load base schema
-                string schemaText = File.ReadAllText("E:\\Sudhir\\Prj\\files\\zip\\src\\invoice_schema - Copy.json");
+                string schemaText = File.ReadAllText("E:\\Sudhir\\Prj\\files\\zip\\src\\invoice_schema.json");
                 var baseSchema = JsonNode.Parse(schemaText);
                 var extractedData = JsonNode.Parse(extractedJson);
 

@@ -110,7 +110,7 @@
             "propertyValues": "",
             "errors": "",
             "specialAssessments": "",
-            "landRecordLocationIds": [],
+            "landRecordLocationIds": [ "" ],
             "propertyUseCategory": "",
             "sourceIdSynthetic": "boolean"
           }
@@ -128,9 +128,9 @@
                   "addressLine1": "string"
                 }
               ],
-              "ownerSourceIds": [],
+              "ownerSourceIds": [ "string" ],
               "propertyState": "string",
-              "ownerNames": [],
+              "ownerNames": [ "string" ],
               "oldOwners": [
                 {
                   "sourceId": "string",
@@ -160,12 +160,12 @@
               "propertyCity": "string",
               "matchScore": "number",
               "parcelNumber": "string",
-              "newOwners": [],
-              "ownerTypes": [],
+              "newOwners": [ "" ],
+              "ownerTypes": [ "" ],
               "id": "number"
             }
           ],
-          "potentialMatchParcels": []
+          "potentialMatchParcels": [ "" ]
         },
         "sale_instrument": "string",
         "terminate_prior_owner_exemption_flag": "boolean",
