@@ -1,0 +1,31 @@
+{
+  "title": "Three Owners - 33.33% Each",
+  "input": "GRANT DEED from DAVID CHEN, LISA MARTINEZ, AND JAMES BROWN AS JOINT TENANTS",
+  "expectedOutput": {
+    "buyer_names_component": [
+      {
+  "firstName": "David",
+      "lastName": "Chen",
+        "buyerVesting": "AS JOINT TENANTS",
+        "buyerPercentage": 33.33,
+        "buyerIsPrimary": true
+      },
+      {
+   "firstName": "Lisa",
+"lastName": "Martinez",
+    "buyerVesting": "AS JOINT TENANTS",
+    "buyerPercentage": 33.33,
+        "buyerIsPrimary": false
+      },
+      {
+        "firstName": "James",
+   "lastName": "Brown",
+ "buyerVesting": "AS JOINT TENANTS",
+        "buyerPercentage": 33.34,
+        "buyerIsPrimary": false
+ }
+    ],
+    "oldOwners": []
+  },
+  "explanation": "Three owners split ownership 33.33%, 33.33%, 33.34% (totals 100%). One owner gets the extra 0.01% to ensure total equals 100%."
+}

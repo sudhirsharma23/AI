@@ -1,0 +1,25 @@
+{
+  "title": "Single Owner - 100% Ownership",
+  "input": "GRANT DEED from JOHN SMITH, AN INDIVIDUAL to JOHN SMITH, TRUSTEE OF THE SMITH FAMILY TRUST",
+  "expectedOutput": {
+    "buyer_names_component": [
+   {
+        "firstName": "John",
+   "lastName": "Smith",
+        "buyerVesting": "TRUSTEE OF THE SMITH FAMILY TRUST",
+"buyerPercentage": 100,
+     "buyerIsPrimary": true
+  }
+    ],
+    "oldOwners": [
+ {
+  "firstName": "John",
+"lastName": "Smith",
+        "percentage": 100,
+        "principal": true,
+    "titleType": "AN INDIVIDUAL"
+      }
+    ]
+  },
+  "explanation": "Single owner = 100% ownership. CRITICAL: Do NOT use 50% for a single owner! Only ONE person = 100%."
+}

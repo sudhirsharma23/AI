@@ -1,14 +1,7 @@
-using Microsoft.Extensions.Caching.Memory;
-using System.Reflection;
-using TextractProcessor.Models;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 using System.Text.Json;
-using System.Text.Json.Serialization;
-using JsonException = System.Text.Json.JsonException;
-using JsonDocument = System.Text.Json.JsonDocument;
-using JsonElement = System.Text.Json.JsonElement;
-using JsonValueKind = System.Text.Json.JsonValueKind;
+using Microsoft.Extensions.Caching.Memory;
+using TextractProcessor.Models;
+using System.Reflection;
 
 namespace TextractProcessor.Services
 {
@@ -18,6 +11,7 @@ namespace TextractProcessor.Services
         private readonly IMemoryCache _cache;
         private readonly string _outputDirectory;
         private readonly string _schemaFilePath;
+        private readonly PromptService _promptService;
 
         public SchemaMapperService(BedrockService bedrockService, IMemoryCache cache, string outputDirectory)
         {
@@ -25,9 +19,14 @@ namespace TextractProcessor.Services
             _cache = cache;
             _outputDirectory = outputDirectory;
 
+            // Get the directory where the application is running
             var baseDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
             _schemaFilePath = Path.Combine(baseDirectory!, "invoice_schema.json");
 
+            // Initialize PromptService
+            _promptService = new PromptService(cache);
+
+            // Ensure the schema file exists in the output directory
             if (!File.Exists(_schemaFilePath))
             {
                 var sourceSchemaPath = Path.Combine(
@@ -47,33 +46,46 @@ namespace TextractProcessor.Services
             }
         }
 
-        public async Task<ProcessingResult> ProcessAndMapSchema(List<SimplifiedTextractResponse> textractResponses,string schemaFilePath,string originalFileName)
+        public async Task<ProcessingResult> ProcessAndMapSchema(
+            List<SimplifiedTextractResponse> textractResults,
+            string schemaFilePath,
+            string originalFileName)
         {
             try
             {
+                // Load the schema
                 var targetSchema = await File.ReadAllTextAsync(_schemaFilePath);
 
-                // Merge the Textract responses
-                var mergedResponse = MergeTextractResponses(textractResponses);
+                // Combine multiple documents into single source data
+                var combinedData = CombineTextractResults(textractResults);
 
-                // Process with Bedrock
-                var (mappedJson, inputTokens, outputTokens) = await _bedrockService.ProcessTextractResults(
-          mergedResponse,
-                   targetSchema
-         );
+                // Build prompt using PromptService (V1 - schema-based)
+                var promptRequest = new PromptRequest
+                {
+                    TemplateType = "document_extraction",
+                    Version = "v1",
+                    IncludeExamples = true,
+                    ExampleSet = "default",
+                    IncludeRules = true,
+                    RuleNames = new List<string> { "percentage_calculation", "name_parsing", "date_format" },
+                    SchemaJson = targetSchema,
+                    SourceData = combinedData
+                };
 
-                var cleanedJson = await ValidateAndCleanJson(mappedJson);
+                var builtPrompt = await _promptService.BuildCompletePromptAsync(promptRequest);
+
+                // Process with Bedrock using the built prompt
+                (string mappedJson, int inputTokens, int outputTokens) = await _bedrockService.ProcessTextractResults(
+                    combinedData,
+                    builtPrompt.SystemMessage,
+                    builtPrompt.UserMessage
+                );
 
                 var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
                 var baseFileName = Path.GetFileNameWithoutExtension(originalFileName);
-                var mappedFilePath = Path.Combine(_outputDirectory, $"{baseFileName}_merged_mapped_{timestamp}.json");
+                var mappedFilePath = Path.Combine(_outputDirectory, $"{baseFileName}_mapped_{timestamp}.json");
 
-                await File.WriteAllTextAsync(mappedFilePath, cleanedJson);
-
-                // Save the merged source data for reference
-                var mergedSourcePath = Path.Combine(_outputDirectory, $"{baseFileName}_merged_source_{timestamp}.json");
-                await File.WriteAllTextAsync(mergedSourcePath,
-             System.Text.Json.JsonSerializer.Serialize(mergedResponse, new JsonSerializerOptions { WriteIndented = true }));
+                await File.WriteAllTextAsync(mappedFilePath, mappedJson);
 
                 return new ProcessingResult
                 {
@@ -94,297 +106,48 @@ namespace TextractProcessor.Services
             }
         }
 
-        private SimplifiedTextractResponse MergeTextractResponses(List<SimplifiedTextractResponse> responses)
+        private string CombineTextractResults(List<SimplifiedTextractResponse> results)
         {
-            if (responses == null || !responses.Any())
-                throw new ArgumentException("No Textract responses to merge");
+            var combined = new System.Text.StringBuilder();
 
-            var mergedResponse = new SimplifiedTextractResponse
+            foreach (var result in results)
             {
-                RawText = string.Join("\n\n=== Next Document ===\n\n",
-              responses.Select(r => r.RawText)),
-                FormFields = new Dictionary<string, string>(),
-                TableData = new List<List<string>>()
-            };
+                combined.AppendLine("=== Document ===");
+                combined.AppendLine();
+                combined.AppendLine("RAW TEXT:");
+                combined.AppendLine(result.RawText);
+                combined.AppendLine();
 
-            // Merge form fields with document index prefix
-            for (int i = 0; i < responses.Count; i++)
-            {
-                var docPrefix = $"Doc{i + 1}_";
-                foreach (var field in responses[i].FormFields)
+                if (result.FormFields?.Any() == true)
                 {
-                    mergedResponse.FormFields[docPrefix + field.Key] = field.Value;
-                }
-            }
-
-            // Merge table data with document index prefix
-            for (int i = 0; i < responses.Count; i++)
-            {
-                var docPrefix = $"Doc{i + 1}_";
-                foreach (var table in responses[i].TableData)
-                {
-                    var prefixedTable = table.Select(cell => $"{docPrefix}{cell}").ToList();
-                    mergedResponse.TableData.Add(prefixedTable);
-                }
-            }
-
-            return mergedResponse;
-        }
-
-        private async Task<string> ValidateAndCleanJson(string jsonString)
-        {
-            try
-            {
-                // Check if the response is an error message from Bedrock
-                if (jsonString.Contains("completionReason") && jsonString.Contains("outputText"))
-                {
-                    var options = new JsonSerializerOptions
+                    combined.AppendLine("FORM FIELDS:");
+                    foreach (var field in result.FormFields)
                     {
-                        PropertyNameCaseInsensitive = true
-                    };
-                    var errorResponse = System.Text.Json.JsonSerializer.Deserialize<TitanErrorResponse>(jsonString, options);
-                    if (errorResponse?.Results?.Any() == true)
-                    {
-                        var outputText = errorResponse.Results[0].OutputText;
-                        // Try to extract JSON from the output text
-                        var jsonStart = outputText.IndexOf('{');
-                        var jsonEnd = outputText.LastIndexOf('}');
+                        combined.AppendLine($"  {field.Key}: {field.Value}");
+                    }
+                    combined.AppendLine();
+                }
 
-                        if (jsonStart >= 0 && jsonEnd > jsonStart)
+                if (result.TableData?.Any() == true)
+                {
+                    combined.AppendLine("TABLE DATA:");
+                    for (int i = 0; i < result.TableData.Count; i++)
+                    {
+                        combined.AppendLine($"  Table {i + 1}:");
+                        var table = result.TableData[i];
+                        foreach (var row in table)
                         {
-                            // Extract the JSON part
-                            jsonString = outputText.Substring(jsonStart, jsonEnd - jsonStart + 1);
-                        }
-                        else
-                        {
-                            throw new JsonException($"No valid JSON found in Bedrock response: {outputText}");
+                            combined.AppendLine($"    {string.Join(" | ", row)}");
                         }
                     }
+                    combined.AppendLine();
                 }
 
-                // First, try to parse as JSON to verify it's valid JSON
-                try
-                {
-                    // Try to clean up any leading/trailing text that might surround the JSON
-                    jsonString = jsonString.Trim();
-                    if (!jsonString.StartsWith("{"))
-                    {
-                        var jsonStart = jsonString.IndexOf('{');
-                        if (jsonStart >= 0)
-                        {
-                            jsonString = jsonString.Substring(jsonStart);
-                        }
-                    }
-                    if (!jsonString.EndsWith("}"))
-                    {
-                        var jsonEnd = jsonString.LastIndexOf('}');
-                        if (jsonEnd >= 0)
-                        {
-                            jsonString = jsonString.Substring(0, jsonEnd + 1);
-                        }
-                    }
-
-                    using var jsonReader = new JsonTextReader(new StringReader(jsonString))
-                    {
-                        DateParseHandling = DateParseHandling.None
-                    };
-
-                    var jObject = JObject.Load(jsonReader);
-
-                    // Handle potential duplicate keys in arrays
-                    HandleDuplicateKeysInArrays(jObject);
-
-                    // Convert to formatted string
-                    var formattedJson = jObject.ToString(Formatting.Indented);
-
-                    // Validate against schema
-                    var schema = await File.ReadAllTextAsync(_schemaFilePath);
-                    var schemaDoc = JsonDocument.Parse(schema);
-                    var outputDoc = JsonDocument.Parse(formattedJson);
-
-                    if (!ValidateJsonStructure(outputDoc.RootElement, schemaDoc.RootElement))
-                    {
-                        // Load the schema to provide more context in the error message
-                        var schemaObj = JObject.Parse(schema);
-                        var schemaProperties = string.Join(", ", schemaObj["properties"]?.Children().Select(p => p.Path) ?? Array.Empty<string>());
-
-                        throw new JsonException(
-                    $"Generated JSON does not match the target schema structure.\n" +
-              $"Expected properties: {schemaProperties}\n" +
-                 $"Received JSON: {formattedJson}"
-                        );
-                    }
-
-                    return formattedJson;
-                }
-                catch (JsonReaderException ex)
-                {
-                    // Log the problematic JSON for debugging
-                    throw new JsonException(
-                           $"Invalid JSON format. Details: {ex.Message}\n" +
-                          $"Position: Line {ex.LineNumber}, Position {ex.LinePosition}\n" +
-                                  $"Raw JSON: {jsonString}"
-                       );
-                }
+                combined.AppendLine("=== End Document ===");
+                combined.AppendLine();
             }
-            catch (JsonException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                throw new JsonException($"Error processing response: {ex.Message}\nResponse content: {jsonString}");
-            }
-        }
 
-        private void HandleDuplicateKeysInArrays(JToken token)
-        {
-            if (token is JObject obj)
-            {
-                var properties = obj.Properties().ToList();
-                foreach (var prop in properties)
-                {
-                    if (prop.Value is JArray array)
-                    {
-                        // Check for and merge duplicate objects in arrays
-                        var uniqueItems = new List<JToken>();
-                        foreach (var item in array)
-                        {
-                            HandleDuplicateKeysInArrays(item);
-                            if (item is JObject itemObj)
-                            {
-                                var existing = uniqueItems.FirstOrDefault(x =>
-                             x is JObject existingObj &&
-                                       HasSameKeyProperties(existingObj, itemObj));
-
-                                if (existing != null)
-                                {
-                                    MergeObjects((JObject)existing, itemObj);
-                                }
-                                else
-                                {
-                                    uniqueItems.Add(item);
-                                }
-                            }
-                            else
-                            {
-                                uniqueItems.Add(item);
-                            }
-                        }
-                        array.Replace(new JArray(uniqueItems));
-                    }
-                    else
-                    {
-                        HandleDuplicateKeysInArrays(prop.Value);
-                    }
-                }
-            }
-            else if (token is JArray array)
-            {
-                foreach (var item in array)
-                {
-                    HandleDuplicateKeysInArrays(item);
-                }
-            }
-        }
-
-        private bool HasSameKeyProperties(JObject obj1, JObject obj2)
-        {
-            // Define your key properties here
-            var keyProperties = new[] { "id", "sourceId", "externalId", "Page" };
-
-            foreach (var key in keyProperties)
-            {
-                if (obj1.TryGetValue(key, out var value1) &&
-          obj2.TryGetValue(key, out var value2))
-                {
-                    if (value1.ToString() != value2.ToString())
-                    {
-                        return false;
-                    }
-                }
-            }
-            return true;
-        }
-
-        private void MergeObjects(JObject target, JObject source)
-        {
-            foreach (var property in source.Properties())
-            {
-                if (!target.ContainsKey(property.Name))
-                {
-                    target.Add(property.Name, property.Value);
-                }
-                else if (property.Value.Type == JTokenType.Object)
-                {
-                    MergeObjects((JObject)target[property.Name], (JObject)property.Value);
-                }
-                else if (property.Value.Type == JTokenType.Array)
-                {
-                    var targetArray = target[property.Name] as JArray;
-                    var sourceArray = property.Value as JArray;
-                    if (targetArray != null && sourceArray != null)
-                    {
-                        foreach (var item in sourceArray)
-                        {
-                            var existingItem = targetArray.FirstOrDefault(x =>
-                     x is JObject existingObj &&
-                    item is JObject itemObj &&
-            HasSameKeyProperties(existingObj, itemObj));
-
-                            if (existingItem == null)
-                            {
-                                targetArray.Add(item);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        private bool ValidateJsonStructure(JsonElement output, JsonElement schema)
-        {
-            try
-            {
-                if (schema.TryGetProperty("type", out var typeElement))
-                {
-                    var schemaType = typeElement.GetString();
-
-                    if (schemaType == "object" && schema.TryGetProperty("properties", out var properties))
-                    {
-                        foreach (var property in properties.EnumerateObject())
-                        {
-                            if (output.TryGetProperty(property.Name, out var value))
-                            {
-                                if (!ValidateJsonStructure(value, property.Value))
-                                {
-                                    return false;
-                                }
-                            }
-                        }
-                    }
-                    else if (schemaType == "array" && schema.TryGetProperty("items", out var items))
-                    {
-                        if (output.ValueKind != JsonValueKind.Array)
-                        {
-                            return false;
-                        }
-
-                        foreach (var item in output.EnumerateArray())
-                        {
-                            if (!ValidateJsonStructure(item, items))
-                            {
-                                return false;
-                            }
-                        }
-                    }
-                }
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
+            return combined.ToString();
         }
 
         private decimal CalculateCost(int inputTokens, int outputTokens)
@@ -397,26 +160,5 @@ namespace TextractProcessor.Services
 
             return inputCost + outputCost;
         }
-    }
-
-    public class TitanErrorResponse
-    {
-        [JsonPropertyName("inputTextTokenCount")]
-        public int InputTextTokenCount { get; set; }
-
-        [JsonPropertyName("results")]
-        public List<TitanErrorResult> Results { get; set; } = new();
-    }
-
-    public class TitanErrorResult
-    {
-        [JsonPropertyName("tokenCount")]
-        public int TokenCount { get; set; }
-
-        [JsonPropertyName("outputText")]
-        public string OutputText { get; set; } = string.Empty;
-
-        [JsonPropertyName("completionReason")]
-        public string CompletionReason { get; set; } = string.Empty;
     }
 }

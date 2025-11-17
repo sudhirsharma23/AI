@@ -19,12 +19,6 @@ namespace TextractProcessor.Services
         private readonly BedrockModelConfig _modelConfig;
         private const int CACHE_DURATION_MINUTES = 60;
         private const string PROMPT_CACHE_PREFIX = "prompt_";
-        // Remove snake_case from request serialization; use per-model options instead
-        // private static readonly JsonSerializerOptions _jsonOptions = new()
-        // {
-        // PropertyNamingPolicy = new SnakeCaseNamingPolicy(),
-        // DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-        // };
 
         public BedrockService(IAmazonBedrockRuntime bedrockClient, IMemoryCache cache, BedrockModelConfig modelConfig = null)
         {
@@ -244,54 +238,40 @@ namespace TextractProcessor.Services
             }
         }
 
-        public async Task<(string response, int inputTokens, int outputTokens)> ProcessTextractResults(SimplifiedTextractResponse textractResults, string targetSchema, ILambdaContext context = null)
+        public async Task<(string response, int inputTokens, int outputTokens)> ProcessTextractResults(
+         string sourceData,
+            string systemPrompt,
+   string userPrompt,
+            ILambdaContext context = null)
         {
             try
             {
-                if (textractResults == null) throw new ArgumentNullException(nameof(textractResults));
-                if (string.IsNullOrWhiteSpace(targetSchema)) throw new ArgumentException("Target schema cannot be empty", nameof(targetSchema));
+                if (string.IsNullOrWhiteSpace(sourceData)) throw new ArgumentException("Source data cannot be empty", nameof(sourceData));
+                if (string.IsNullOrWhiteSpace(systemPrompt)) throw new ArgumentException("System prompt cannot be empty", nameof(systemPrompt));
+                if (string.IsNullOrWhiteSpace(userPrompt)) throw new ArgumentException("User prompt cannot be empty", nameof(userPrompt));
 
                 var requestId = context?.AwsRequestId ?? Guid.NewGuid().ToString();
-                context?.Logger.LogLine($"[RequestId: {requestId}] Starting Textract processing");
+                context?.Logger.LogLine($"[RequestId: {requestId}] Starting Bedrock processing with custom prompts");
 
-                // Generate prompt
-                var prompt = CreatePrompt(textractResults, targetSchema);
-
-                // Calculate cache key based on prompt
-                var promptCacheKey = $"{PROMPT_CACHE_PREFIX}{CalculateHash(prompt)}";
+                // Calculate cache key based on all inputs
+                var cacheInput = $"{sourceData}|{systemPrompt}|{userPrompt}|{_modelConfig.ModelId}";
+                var promptCacheKey = $"{PROMPT_CACHE_PREFIX}{CalculateHash(cacheInput)}";
 
                 context?.Logger.LogLine($"[RequestId: {requestId}] Generated prompt cache key: {promptCacheKey}");
-                context?.Logger.LogLine($"[RequestId: {requestId}] Prompt hash based on {prompt.Length} characters");
 
                 // Try to get from prompt cache first
                 if (_cache.TryGetValue<CachedResponse>(promptCacheKey, out var promptCachedResponse))
                 {
                     context?.Logger.LogLine($"[RequestId: {requestId}] ✓ Prompt cache HIT - returning cached response");
-                    context?.Logger.LogLine($"[RequestId: {requestId}] Cache entry age: {(DateTime.UtcNow - promptCachedResponse.CachedAt).TotalMinutes:F2} minutes");
                     return (promptCachedResponse.Response, promptCachedResponse.InputTokens, promptCachedResponse.OutputTokens);
                 }
 
                 context?.Logger.LogLine($"[RequestId: {requestId}] ✗ Prompt cache MISS");
-
-                // If not in prompt cache, check document cache
-                var docCacheKey = CalculateHash(JsonSerializer.Serialize(textractResults) + targetSchema + _modelConfig.ModelId);
-                context?.Logger.LogLine($"[RequestId: {requestId}] Generated document cache key: {docCacheKey}");
-
-                if (_cache.TryGetValue<CachedResponse>(docCacheKey, out var docCachedResponse))
-                {
-                    context?.Logger.LogLine($"[RequestId: {requestId}] ✓ Document cache HIT - returning cached response");
-                    // Store in prompt cache for future use
-                    _cache.Set(promptCacheKey, docCachedResponse, TimeSpan.FromMinutes(CACHE_DURATION_MINUTES));
-                    context?.Logger.LogLine($"[RequestId: {requestId}] Copied to prompt cache");
-                    return (docCachedResponse.Response, docCachedResponse.InputTokens, docCachedResponse.OutputTokens);
-                }
-
-                context?.Logger.LogLine($"[RequestId: {requestId}] ✗ Document cache MISS");
                 context?.Logger.LogLine($"[RequestId: {requestId}] Cache miss - processing with Bedrock");
                 context?.Logger.LogLine($"[RequestId: {requestId}] Invoking Bedrock model {_modelConfig.ModelId}");
 
-                // Create model-specific request
-                var request = CreateModelRequest(prompt);
+                // Create model-specific request with custom prompt
+                var request = CreateModelRequestWithPrompt(systemPrompt, userPrompt);
                 var requestOptions = GetRequestSerializerOptions();
                 var requestJson = JsonSerializer.Serialize(request, requestOptions);
                 context?.Logger.LogLine($"[RequestId: {requestId}] Request JSON: {requestJson}");
@@ -343,12 +323,10 @@ namespace TextractProcessor.Services
                     OutputTokens = outputTokens
                 };
 
-                // Cache response with both keys
-                _cache.Set(docCacheKey, cacheEntry, TimeSpan.FromMinutes(CACHE_DURATION_MINUTES));
+                // Cache response with prompt key
                 _cache.Set(promptCacheKey, cacheEntry, TimeSpan.FromMinutes(CACHE_DURATION_MINUTES));
 
                 context?.Logger.LogLine($"[RequestId: {requestId}] ✓ Response cached successfully");
-                context?.Logger.LogLine($"[RequestId: {requestId}] - Document cache key: {docCacheKey}");
                 context?.Logger.LogLine($"[RequestId: {requestId}] - Prompt cache key: {promptCacheKey}");
                 context?.Logger.LogLine($"[RequestId: {requestId}] - Cache duration: {CACHE_DURATION_MINUTES} minutes");
                 context?.Logger.LogLine($"[RequestId: {requestId}] - Cache entry created at: {cacheEntry.CachedAt:yyyy-MM-dd HH:mm:ss} UTC");
@@ -378,6 +356,11 @@ namespace TextractProcessor.Services
                     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
                 },
                 Models.RequestFormat.Claude => new JsonSerializerOptions
+                {
+                    PropertyNamingPolicy = null,
+                    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+                },
+                Models.RequestFormat.Qwen => new JsonSerializerOptions
                 {
                     PropertyNamingPolicy = null,
                     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
@@ -590,457 +573,106 @@ namespace TextractProcessor.Services
         }
 
         private static (string, int, int) ParseNovaResponse(string responseJson, JsonSerializerOptions options)
-        {
+   {
             // Extract the model completion text and then extract JSON from within it
             var text = TryExtractCompletionText(responseJson);
             if (!string.IsNullOrWhiteSpace(text))
-            {
-                text = JsonExtractor.StripCodeFences(text);
-                var extracted = JsonExtractor.ExtractFirstJsonObject(text) ?? text;
-                // If extracted looks like JSON, keep as-is; otherwise return raw text
+         {
+       text = JsonExtractor.StripCodeFences(text);
+       var extracted = JsonExtractor.ExtractFirstJsonObject(text) ?? text;
+         // If extracted looks like JSON, keep as-is; otherwise return raw text
                 try
-                {
-                    using (JsonDocument.Parse(extracted)) { /* ok */ }
-                    return (extracted, EstimateTokenCount(responseJson), EstimateTokenCount(extracted));
-                }
+  {
+      using (JsonDocument.Parse(extracted)) { /* ok */ }
+   return (extracted, EstimateTokenCount(responseJson), EstimateTokenCount(extracted));
+          }
                 catch
-                {
-                    return (text, EstimateTokenCount(responseJson), EstimateTokenCount(text));
-                }
-            }
+         {
+           return (text, EstimateTokenCount(responseJson), EstimateTokenCount(text));
+      }
+         }
 
             // Fallback: normalize entire response
-            var normalized = JsonExtractor.NormalizeJson(responseJson);
-            return (normalized, EstimateTokenCount(responseJson), EstimateTokenCount(normalized));
+       var normalized = JsonExtractor.NormalizeJson(responseJson);
+         return (normalized, EstimateTokenCount(responseJson), EstimateTokenCount(normalized));
         }
 
-        private static string CreatePrompt(SimplifiedTextractResponse textractResults, string targetSchema)
-        {
-            // Ensure we have data to process
-            if (string.IsNullOrEmpty(textractResults.RawText))
-            {
-                throw new ArgumentException("No raw text available in the textract results to process");
-            }
-
-            // Use only the RawText for the source data to keep the prompt focused and small.
-            var sourceData = textractResults.RawText;
-            var fewShotExamples = GetFewShotExamples();
-            //{ fewShotExamples}
-            return $@"Transform the following source data into a JSON object that matches the target schema structure.
-
-
-
-Source Data:
-{sourceData}
-
-Target Schema:
-{targetSchema}
-
-CRITICAL RULES - READ CAREFULLY:
-1. Data Types & Formats:
-   - Use proper data types (numbers without quotes, strings with quotes)
-   - Use YYYY-MM-DD format for all dates
-   - Use null for unmapped required fields
-   - Match property names exactly as shown in schema
-
-2. Owner/Buyer Handling Rules (EXTREMELY IMPORTANT):
-   - Count TOTAL number of owners/buyers FIRST before calculating percentages
-   - If multiple owners/buyers are mentioned, create separate entries for EACH person
-   - PERCENTAGE CALCULATION (CRITICAL):
-     * IF ONLY 1 BUYER/OWNER -> percentage/buyerPercentage = 100 (NOT 50!)
-     * IF 2 BUYERS/OWNERS -> percentage/buyerPercentage = 50 for EACH
-     * IF 3 BUYERS/OWNERS -> percentage/buyerPercentage = 33.33 for EACH (33.34 for one)
-     * IF 4 BUYERS/OWNERS -> percentage/buyerPercentage = 25 for EACH
-   - Formula: buyerPercentage = 100 / (ACTUAL count of buyer entries)
-   - Set buyerIsPrimary = true for the FIRST buyer only, false for all others
-   - Include BOTH old owners (grantors) and new owners (grantees) in their respective arrays
-
-3. OLD OWNERS ARRAY RULES (CRITICAL - COMMON MISTAKE):
-   WARNING COMMON ERROR: Only including ONE owner when there are TWO or MORE!
-   WARNING CRITICAL ERROR: Setting percentage to 50% when there is only ONE owner!
-   
-   Step-by-step process for oldOwners:
-   a) Look for ""ownerNames"" array in source data - count the elements
-   b) Look for phrases like ""X AND Y"" or ""X, Y"" in conveyance or granting text
-   c) Count how many separate names you found (THIS IS THE MOST IMPORTANT STEP!)
-   d) Create EXACTLY that many entries in the oldOwners array
-   e) Calculate percentage = 100 / (ACTUAL number of entries you just created)
-   f) Set first entry principal = true, rest = false
-   
-   Example: If you see ""ownerNames"": [""CHARLES D. SHAPIRO"", ""SUZANNE D. SHAPIRO""]
-   You MUST create 2 entries in oldOwners array:
-   - Entry 1: Charles with 50%
-   - Entry 2: Suzanne with 50%
-   
-   Example: If you see ""ownerNames"": [""JOHN SMITH""] (ONLY ONE NAME)
-   You MUST create 1 entry in oldOwners array:
- - Entry 1: John with 100% (NOT 50!)
-
-4. Name Parsing Rules:
-   - Extract first, middle, and last names separately when available
-   - If only full name is available, parse it intelligently:
-     * First word = firstName
-     * Last word = lastName
-     * Middle words = middleName
-   - Preserve original vesting/title information exactly as written
-   - The word ""AND"" or ""and"" between names ALWAYS means separate people
-
-5. Multiple Entries Validation:
-   - For buyer_names_component array: Create one object per buyer/owner
-   - For oldOwners array: Create one object per previous owner
-   - NEVER combine multiple people into a single entry
-   - Each person must have their own complete object with all fields
-   - If source has ""ownerNames"": [""Name1"", ""Name2""], you MUST create 2 oldOwners entries
- - If source has ""ownerNames"": [""Name1""], you MUST create 1 oldOwners entry with 100%
-
-6. Validation Checklist Before Returning (MANDATORY):
-   [ ] Count total owners mentioned in source data (check ownerNames array length)
-   [ ] Count total entries you created in buyer_names_component array
-   [ ] Count total entries you created in oldOwners array
-   [ ] Verify: oldOwners entries = number of names in ownerNames array
-   [ ] Verify: buyer_names_component entries = number of grantee names
-   [ ] **CRITICAL**: Verify percentage calculation:
-      - If 1 entry: percentage MUST be 100
-      - If 2 entries: each percentage MUST be 50
-      - If 3 entries: percentages MUST be 33.33, 33.33, 33.34
-      - If 4 entries: each percentage MUST be 25
-   [ ] Verify: (number of entries times each percentage) = 100
-   [ ] Verify first entry has buyerIsPrimary/principal: true
-   [ ] Verify remaining entries have buyerIsPrimary/principal: false
-
-7. Common Patterns That Indicate Multiple People:
-   - ""X AND Y"" = 2 people (not 1!)
-   - ""X, Y, AND Z"" = 3 people
-   - ""husband and wife"" = 2 people
-   - ownerNames: [""Name1"", ""Name2""] = 2 people
-   - ""joint tenants"" with multiple names = multiple people
-   
-   Common Patterns That Indicate SINGLE Person:
-   - ownerNames: [""Name1""] (ARRAY WITH ONE ELEMENT) = 1 person with 100%
-   - ""John Smith, an individual"" = 1 person with 100%
-   - ""ABC Corporation"" (no ""and"" connector) = 1 entity with 100%
-
-EXAMPLES FROM YOUR EXACT USE CASE:
-
-Example A - TWO OWNERS:
-Source: ownerNames: [""CHARLES D. SHAPIRO"", ""SUZANNE D. SHAPIRO""]
-Array Length = 2 -> Create 2 entries with 50% each
-Correct oldOwners Output:
-[
-  {{{{
-    ""firstName"": ""Charles"",
-    ""middleName"": ""D."",
-    ""lastName"": ""Shapiro"",
-    ""percentage"": 50,
-    ""principal"": true
-  }}}},
-  {{{{
-    ""firstName"": ""Suzanne"",
-    ""middleName"": ""D."",
-    ""lastName"": ""Shapiro"",
-    ""percentage"": 50,
-    ""principal"": false
-  }}}}
-]
-
-Example B - ONE OWNER (CRITICAL - COMMON ERROR):
-Source: ownerNames: [""JOHN SMITH""]
-Array Length = 1 -> Create 1 entry with 100%
-Correct oldOwners Output:
-[
-  {{{{
-    ""firstName"": ""John"",
-    ""lastName"": ""Smith"",
-    ""percentage"": 100,
-    ""principal"": true
-  }}}}
-]
-[WRONG] Creating entry with percentage: 50 - THIS IS INCORRECT!
-
-Example C - TWO BUYERS:
-Source: ""Charles David Shapiro and Suzanne Denise Shapiro, as co-trustees""
-Count = 2 people -> Create 2 entries with 50% each
-Correct buyer_names_component Output:
-[
-  {{{{""firstName"": ""Charles"", ""middleName"": ""David"", ""lastName"": ""Shapiro"", ""buyerPercentage"": 50, ""buyerIsPrimary"": true}}}},
-  {{{{""firstName"": ""Suzanne"", ""middleName"": ""Denise"", ""lastName"": ""Shapiro"", ""buyerPercentage"": 50, ""buyerIsPrimary"": false}}}}
-]
-
-Example D - ONE BUYER (CRITICAL - COMMON ERROR):
-Source: ""John Smith, Trustee of the Smith Family Trust""
-Count = 1 person -> Create 1 entry with 100%
-Correct buyer_names_component Output:
-[
-  {{{{""firstName"": ""John"", ""lastName"": ""Smith"", ""buyerVesting"": ""TRUSTEE OF THE SMITH FAMILY TRUST"", ""buyerPercentage"": 100, ""buyerIsPrimary"": true}}}}
-]
-[WRONG] Creating entry with buyerPercentage: 50 - THIS IS INCORRECT!
-
-Example E - THREE OWNERS:
-Source: ""David Chen, Lisa Martinez, and James Brown as joint tenants""
-Count = 3 people -> Create 3 entries with 33.33% each (one gets 33.34% to total 100%)
-Correct buyer_names_component Output:
-[
-  {{{{""firstName"": ""David"", ""lastName"": ""Chen"", ""buyerPercentage"": 33.33, ""buyerIsPrimary"": true}}}},
-  {{{{""firstName"": ""Lisa"", ""lastName"": ""Martinez"", ""buyerPercentage"": 33.33, ""buyerIsPrimary"": false}}}},
-  {{{{""firstName"": ""James"", ""lastName"": ""Brown"", ""buyerPercentage"": 33.34, ""buyerIsPrimary"": false}}}}
-]
-
-Example F - From ownerNames Array (TWO OWNERS):
-Input in ownerNames: [""CHARLES D. SHAPIRO"", ""SUZANNE D. SHAPIRO""]
-This is an ARRAY with 2 elements = 2 SEPARATE OWNERS!
-Correct Output for oldOwners:
-[
-  {{""firstName"": ""Charles"", ""middleName"": ""D."", ""lastName"": ""Shapiro"", ""percentage"": 50, ""principal"": true}},
-  {{""firstName"": ""Suzanne"", ""middleName"": ""D."", ""lastName"": ""Shapiro"", ""percentage"": 50, ""principal"": false}}
-]
-
-Example G - From ownerNames Array (ONE OWNER - CRITICAL):
-Input in ownerNames: [""JOHN SMITH""]
-This is an ARRAY with 1 element = 1 OWNER with 100 percent!
-Correct Output for oldOwners:
-[
-  {{""firstName"": ""John"", ""lastName"": ""Smith"", ""percentage"": 100, ""principal"": true}}
-]
-WRONG: Setting percentage to 50 - THIS IS INCORRECT!
-CORRECT: One owner in array = 100 percent
-
-CRITICAL PARSING RULES:
-1. Count ALL names separated by commas or ""and""/""AND""
-2. If NO ""and""/""AND"" connector and NO comma-separated names then Only 1 person
-3. Create ONE SEPARATE ENTRY for EACH name you counted
-4. Calculate percentage: 100 divided by (ACTUAL number of entries)
-5. VERIFY: 1 entry = 100 percent, 2 entries = 50 percent each, 3 entries = 33.33 percent each
-6. Set first entry principal or buyerIsPrimary = true, all others = false
-
-PERCENTAGE ERROR PREVENTION:
-- DO NOT default to 50 percent without counting
-- DO NOT use 50 percent for single owners
-- ALWAYS count first, then calculate: 100 divided by count
-- One owner or buyer equals 100 percent (NOT 50 percent)
-- Two owners or buyers equals 50 percent each
-- Three owners or buyers equals 33.33 percent each (one gets 33.34)
-- Four owners or buyers equals 25 percent each
-
-Output Format: Return ONLY the complete Target Schema JSON with NO additional text, explanations, or markdown formatting.";
-        }
-
-        private object CreateModelRequest(string prompt)
+        private object CreateModelRequestWithPrompt(string systemPrompt, string userPrompt)
         {
             return _modelConfig.RequestFormat switch
-            {
-                Models.RequestFormat.Titan => new
-                {
-                    inputText = prompt,
-                    textGenerationConfig = new
-                    {
-                        maxTokenCount = _modelConfig.InferenceParameters.MaxTokens,
-                        temperature = _modelConfig.InferenceParameters.Temperature,
-                        topP = _modelConfig.InferenceParameters.TopP,
-                        stopSequences = _modelConfig.InferenceParameters.StopSequences ?? Array.Empty<string>()
-                    }
-                },
-                Models.RequestFormat.Nova => new
-                {
-                    messages = new[]
-                    {
-                              new
-                                 {
-                             role = "user",
-                               content = new[] { new { text = prompt } }
-                                  }
-                                    }
-                },
-                Models.RequestFormat.Claude => new
-                {
-                    anthropic_version = _modelConfig.InferenceParameters.Version,
-                    system = _modelConfig.SystemPrompt,
-                    max_tokens = _modelConfig.InferenceParameters.MaxTokens,
-                    temperature = _modelConfig.InferenceParameters.Temperature,
-                    top_p = _modelConfig.InferenceParameters.TopP,
-                    messages = new[]
-                       {
-                        new { role = "user", content = prompt }
-                                 }
-                },
-                Models.RequestFormat.Qwen => new
-                {
-                    messages = new[]
-                    {
-                        new { role = "system", content = _modelConfig.SystemPrompt },
-                        new { role = "user", content = prompt }
-                    },
-                    top_p = _modelConfig.InferenceParameters.TopP,
-                    temperature = _modelConfig.InferenceParameters.Temperature,
-                    max_tokens = _modelConfig.InferenceParameters.MaxTokens
-                },
-                _ => throw new ArgumentException($"Unsupported model format: {_modelConfig.RequestFormat}")
+   {
+      Models.RequestFormat.Titan => new
+       {
+           inputText = userPrompt,
+          textGenerationConfig = new
+    {
+  maxTokenCount = _modelConfig.InferenceParameters.MaxTokens,
+         temperature = _modelConfig.InferenceParameters.Temperature,
+    topP = _modelConfig.InferenceParameters.TopP,
+  stopSequences = _modelConfig.InferenceParameters.StopSequences ?? Array.Empty<string>()
+     }
+              },
+    Models.RequestFormat.Nova => new
+   {
+  messages = new[]
+    {
+    new
+   {
+    role = "system",
+                content = new[] { new { text = systemPrompt } }
+            },
+     new
+             {
+   role = "user",
+     content = new[] { new { text = userPrompt } }
+       }
+          }
+ },
+  Models.RequestFormat.Claude => new
+      {
+            anthropic_version = _modelConfig.InferenceParameters.Version,
+               system = systemPrompt,
+    max_tokens = _modelConfig.InferenceParameters.MaxTokens,
+      temperature = _modelConfig.InferenceParameters.Temperature,
+              top_p = _modelConfig.InferenceParameters.TopP,
+   messages = new[]
+               {
+         new { role = "user", content = userPrompt }
+     }
+},
+ Models.RequestFormat.Qwen => new
+          {
+          messages = new[]
+  {
+new { role = "system", content = systemPrompt },
+   new { role = "user", content = userPrompt }
+ },
+      top_p = _modelConfig.InferenceParameters.TopP,
+                  temperature = _modelConfig.InferenceParameters.Temperature,
+      max_tokens = _modelConfig.InferenceParameters.MaxTokens
+          },
+     _ => throw new ArgumentException($"Unsupported model format: {_modelConfig.RequestFormat}")
             };
-        }
+     }
 
         private static string CalculateHash(string input)
         {
             using var sha256 = SHA256.Create();
             var bytes = Encoding.UTF8.GetBytes(input);
-            var hash = sha256.ComputeHash(bytes);
-            return Convert.ToBase64String(hash);
-        }
+    var hash = sha256.ComputeHash(bytes);
+     return Convert.ToBase64String(hash);
+      }
 
         private static int EstimateTokenCount(string text)
         {
-            return text?.Length / 4 ?? 0;
+   return text?.Length / 4 ?? 0;
         }
-
-        private static string GetFewShotExamples()
-        {
-            return @"LEARNING EXAMPLES - Study these before processing:
-
-Example 1 - OLD OWNERS (CRITICAL):
-Input Text: ""Previous owners: CHARLES D. SHAPIRO AND SUZANNE D. SHAPIRO, HUSBAND AND WIFE AS JOINT TENANTS""
-IMPORTANT: The word ""AND"" between names means TWO SEPARATE PEOPLE!
-Correct Output for oldOwners array:
-[
-  {{
-    ""firstName"": ""Charles"",
-    ""middleName"": ""D."",
-    ""lastName"": ""Shapiro"",
-    ""percentage"": 50,
-    ""principal"": true,
-    ""titleType"": ""HUSBAND AND WIFE AS JOINT TENANTS""
-  }},
-  {{
-    ""firstName"": ""Suzanne"",
-    ""middleName"": ""D."",
-    ""lastName"": ""Shapiro"",
-    ""percentage"": 50,
-    ""principal"": false,
-    ""titleType"": ""HUSBAND AND WIFE AS JOINT TENANTS""
-  }}
-]
-WRONG (DON'T DO THIS): Only one entry with Charles - THIS IS INCORRECT!
-
-Example 1B - ONE OLD OWNER (CRITICAL - PREVENT COMMON ERROR):
-Input Text: ""Previous owner: JOHN SMITH, AN INDIVIDUAL""
-IMPORTANT: Only ONE person mentioned = 100% ownership!
-Correct Output for oldOwners array:
-[
-  {{
-    ""firstName"": ""John"",
-    ""lastName"": ""Smith"",
-    ""percentage"": 100,
-    ""principal"": true,
-    ""titleType"": ""AN INDIVIDUAL""
-  }}
-]
-WRONG OUTPUT: Setting percentage to 50 when there is only one owner - THIS IS INCORRECT!
-CORRECT: One owner = 100 percent (not 50 percent!)
-
-Example 2 - NEW OWNERS (CRITICAL):
-Input: ""GRANT DEED to Charles David Shapiro and Suzanne Denise Shapiro as co-trustees of the Shapiro Family Trust""
-IMPORTANT: ""and"" between names means TWO SEPARATE PEOPLE!
-Correct Output for buyer_names_component:
-[
-  {{
-    ""firstName"": ""Charles"",
-    ""middleName"": ""David"",
-    ""lastName"": ""Shapiro"",
-    ""buyerVesting"": ""AS CO-TRUSTEES OF THE SHapiro FAMILY TRUST"",
- ""buyerPercentage"": 50,
-    ""buyerIsPrimary"": true
-  }},
-  {{
-    ""firstName"": ""Suzanne"",
-    ""middleName"": ""Denise"",
-    ""lastName"": ""Shapiro"",
-    ""buyerVesting"": ""AS CO-TRUSTEES OF THE SHapiro FAMILY TRUST"",
-    ""buyerPercentage"": 50,
-    ""buyerIsPrimary"": false
-  }}
-]
-
-Example 2B - ONE NEW OWNER (CRITICAL - PREVENT COMMON ERROR):
-Input: ""GRANT DEED to John Smith, Trustee of the Smith Family Trust""
-IMPORTANT: Only ONE person mentioned = 100% ownership!
-Correct Output for buyer_names_component:
-[
-  {{
-    ""firstName"": ""John"",
-    ""lastName"": ""Smith"",
-    ""buyerVesting"": ""TRUSTEE OF THE SMITH FAMILY TRUST"",
-    ""buyerPercentage"": 100,
-    ""buyerIsPrimary"": true
-  }}
-]
-WRONG OUTPUT: Setting buyerPercentage to 50 when there is only one buyer - THIS IS INCORRECT!
-CORRECT: One buyer = 100 percent (not 50 percent!)
-
-Example 3 - Identifying Multiple Names:
-Look for these patterns that indicate MULTIPLE people:
-- ""X AND Y"" = 2 people
-- ""X, Y, AND Z"" = 3 people
-- ""X, Y, Z, AND W"" = 4 people
-- ""husband and wife"" = 2 people
-- ""joint tenants"" (with multiple names) = multiple people
-
-Look for these patterns that indicate SINGLE person:
-- ""X, an individual"" = 1 person (100%)
-- ""X Corporation"" (no AND connector) = 1 entity (100%)
-- ""X, Trustee"" (no AND connector) = 1 person (100%)
-- ownerNames: [""Name1""] (array with ONE element) = 1 person (100%)
-
-Example 4 - Three Owners:
-Input: ""David Chen, Lisa Martinez, and James Brown as joint tenants""
-Output for buyer_names_component:
-[
-  {{""firstName"": ""David"", ""lastName"": ""Chen"", ""buyerPercentage"": 33.33, ""buyerIsPrimary"": true}},
-  {{""firstName"": ""Lisa"", ""lastName"": ""Martinez"", ""buyerPercentage"": 33.33, ""buyerIsPrimary"": false}},
-  {{""firstName"": ""James"", ""lastName"": ""Brown"", ""buyerPercentage"": 33.34, ""buyerIsPrimary"": false}}
-]
-
-Example 5 - From ownerNames Array (TWO OWNERS):
-Input in ownerNames: [""CHARLES D. SHAPIRO"", ""SUZANNE D. SHAPIRO""]
-This is an ARRAY with 2 elements = 2 SEPARATE OWNERS!
-Correct Output for oldOwners:
-[
-  {{""firstName"": ""Charles"", ""middleName"": ""D."", ""lastName"": ""Shapiro"", ""percentage"": 50, ""principal"": true}},
-  {{""firstName"": ""Suzanne"", ""middleName"": ""D."", ""lastName"": ""Shapiro"", ""percentage"": 50, ""principal"": false}}
-]
-
-Example 5B - From ownerNames Array (ONE OWNER - CRITICAL):
-Input in ownerNames: [""JOHN SMITH""]
-This is an ARRAY with 1 element = 1 OWNER with 100 percent!
-Correct Output for oldOwners:
-[
-  {{""firstName"": ""John"", ""lastName"": ""Smith"", ""percentage"": 100, ""principal"": true}}
-]
-WRONG: Setting percentage to 50 - THIS IS INCORRECT!
-CORRECT: One owner in array = 100 percent
-
-CRITICAL PARSING RULES:
-1. Count ALL names separated by commas or ""and""/""AND""
-2. If NO ""and""/""AND"" connector and NO comma-separated names then Only 1 person
-3. Create ONE SEPARATE ENTRY for EACH name you counted
-4. Calculate percentage: 100 divided by (ACTUAL number of entries)
-5. VERIFY: 1 entry = 100 percent, 2 entries = 50 percent each, 3 entries = 33.33 percent each
-6. Set first entry principal or buyerIsPrimary = true, all others = false
-
-PERCENTAGE ERROR PREVENTION:
-- DO NOT default to 50 percent without counting
-- DO NOT use 50 percent for single owners
-- ALWAYS count first, then calculate: 100 divided by count
-- One owner or buyer equals 100 percent (NOT 50 percent)
-- Two owners or buyers equals 50 percent each
-- Three owners or buyers equals 33.33 percent each (one gets 33.34)
-- Four owners or buyers equals 25 percent each
-
----END OF EXAMPLES---
-";
-        }
-    }
+  }
 
     // Response Models
     public class TitanResponse
     {
-        public List<TitanResult> Results { get; set; } = new();
+    public List<TitanResult> Results { get; set; } = new();
     }
 
     public class ClaudeResponse
@@ -1052,9 +684,9 @@ PERCENTAGE ERROR PREVENTION:
     public class QwenResponse
     {
         [JsonPropertyName("output")]
-        public QwenOutput Output { get; set; }
-        [JsonPropertyName("usage")]
-        public QwenUsage Usage { get; set; }
+     public QwenOutput Output { get; set; }
+   [JsonPropertyName("usage")]
+  public QwenUsage Usage { get; set; }
     }
 
     public class QwenChatResponse
@@ -1062,14 +694,14 @@ PERCENTAGE ERROR PREVENTION:
         [JsonPropertyName("choices")]
         public List<QwenChatChoice> Choices { get; set; }
         [JsonPropertyName("usage")]
-        public QwenChatUsage Usage { get; set; }
+      public QwenChatUsage Usage { get; set; }
     }
 
     public class QwenChatChoice
     {
         [JsonPropertyName("message")]
         public QwenChatMessage Message { get; set; }
-        [JsonPropertyName("finish_reason")]
+    [JsonPropertyName("finish_reason")]
         public string FinishReason { get; set; }
     }
 
@@ -1077,44 +709,44 @@ PERCENTAGE ERROR PREVENTION:
     {
         [JsonPropertyName("content")]
         public string Content { get; set; }
-        [JsonPropertyName("role")]
+    [JsonPropertyName("role")]
         public string Role { get; set; }
     }
 
     public class QwenChatUsage
-    {
-        [JsonPropertyName("prompt_tokens")]
+ {
+    [JsonPropertyName("prompt_tokens")]
         public int PromptTokens { get; set; }
         [JsonPropertyName("completion_tokens")]
-        public int CompletionTokens { get; set; }
+    public int CompletionTokens { get; set; }
         [JsonPropertyName("total_tokens")]
         public int TotalTokens { get; set; }
     }
 
-    public class QwenOutput
-    {
-        [JsonPropertyName("choices")]
-        public List<QwenChatChoice> Choices { get; set; }
+  public class QwenOutput
+  {
+     [JsonPropertyName("choices")]
+   public List<QwenChatChoice> Choices { get; set; }
     }
 
     public class QwenChoice
     {
-        [JsonPropertyName("message")]
+     [JsonPropertyName("message")]
         public QwenMessage Message { get; set; }
-        [JsonPropertyName("stop_reason")]
-        public string StopReason { get; set; }
+     [JsonPropertyName("stop_reason")]
+ public string StopReason { get; set; }
     }
 
     public class QwenMessage
     {
-        [JsonPropertyName("content")]
-        public string Content { get; set; }
+      [JsonPropertyName("content")]
+  public string Content { get; set; }
     }
 
-    public class QwenUsage
+  public class QwenUsage
     {
-        [JsonPropertyName("input_tokens")]
-        public int InputTokens { get; set; }
+     [JsonPropertyName("input_tokens")]
+    public int InputTokens { get; set; }
 
         [JsonPropertyName("output_tokens")]
         public int OutputTokens { get; set; }
@@ -1125,30 +757,30 @@ PERCENTAGE ERROR PREVENTION:
         [JsonPropertyName("input_tokens")]
         public int InputTokens { get; set; }
 
-        [JsonPropertyName("output_tokens")]
+      [JsonPropertyName("output_tokens")]
         public int OutputTokens { get; set; }
     }
 
     public class TitanResult
     {
         [JsonPropertyName("outputText")]
-        public string OutputText { get; set; } = string.Empty;
+    public string OutputText { get; set; } = string.Empty;
 
         [JsonPropertyName("completionReason")]
         public string CompletionReason { get; set; } = string.Empty;
 
-        [JsonPropertyName("inputTextTokenCount")]
-        public int InputTextTokenCount { get; set; }
+    [JsonPropertyName("inputTextTokenCount")]
+     public int InputTextTokenCount { get; set; }
 
-        [JsonPropertyName("outputTextTokenCount")]
+  [JsonPropertyName("outputTextTokenCount")]
         public int OutputTextTokenCount { get; set; }
-    }
+ }
 
     public class CachedResponse
     {
         public string Response { get; set; } = string.Empty;
         public int InputTokens { get; set; }
         public int OutputTokens { get; set; }
-        public DateTime CachedAt { get; set; } = DateTime.UtcNow;
-    }
+     public DateTime CachedAt { get; set; } = DateTime.UtcNow;
+  }
 }
