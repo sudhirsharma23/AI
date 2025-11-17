@@ -14,13 +14,18 @@ using System.Text.Json.Nodes;
 using System.Reflection;
 using System.IO;
 using ImageTextExtractor.Configuration;
-using ImageTextExtractor.Services;  // Add this for PromptService
+using ImageTextExtractor.Services;
+using ImageTextExtractor.Models;
+using ImageTextExtractor.Services.Ocr;  // Add OCR services
 
 namespace ImageTextExtractorApp
 {
     internal static class Program
     {
         private const string OutputDirectory = "OutputFiles";
+
+        // Configure which model to use - easy to switch!
+        private static readonly AzureOpenAIModelConfig ModelConfig = AzureOpenAIModelConfig.GPT4oMini;
 
         private static async Task Main()
         {
@@ -35,145 +40,102 @@ namespace ImageTextExtractorApp
         // Asynchronous method to process all image URLs
         private static async Task RunAsync(IMemoryCache memoryCache)
         {
-            // SECURE: Load configuration from environment variables, user secrets, or appsettings
-            Console.WriteLine("Loading Azure AI configuration...");
-            var config = AzureAIConfig.Load();
-            config.Validate();
+            Console.WriteLine("\n=== ImageTextExtractor - OCR Processing ===\n");
 
-            // Azure endpoint and credentials loaded securely
-            var endpoint = config.Endpoint + "/contentunderstanding/analyzers/prebuilt-documentAnalyzer:analyze?api-version=2025-05-01-preview";
-            var subscriptionKey = config.SubscriptionKey;
+            // Load OCR configuration first
+            Console.WriteLine("Loading OCR configuration...");
+            var ocrConfig = OcrConfig.Load();
+            ocrConfig.Validate();
+
+            // Load Azure AI config (may be null if using Aspose only)
+            AzureAIConfig azureConfig = null;
+            if (ocrConfig.IsAzureEnabled)
+            {
+                Console.WriteLine("Loading Azure AI configuration...");
+                azureConfig = AzureAIConfig.Load();
+                azureConfig.Validate();
+            }
 
             var imageUrls = new[] {
-          "https://github.com/sudhirsharma23/azure-ai-foundry-image-text-extractor/blob/main/src/images/2025000065659-1.tif?raw=true",
-          "https://github.com/sudhirsharma23/azure-ai-foundry-image-text-extractor/blob/main/src/images/2025000065659.tif?raw=true"
-            };
+           "https://github.com/sudhirsharma23/azure-ai-foundry-image-text-extractor/blob/main/src/images/2025000065659-1.tif?raw=true",
+         "https://github.com/sudhirsharma23/azure-ai-foundry-image-text-extractor/blob/main/src/images/2025000065659.tif?raw=true"
+         };
 
-            // Use a single HttpClient instance for all requests
-            using var client = new HttpClient();
-            client.DefaultRequestHeaders.Add("Ocp-Apim-Subscription-Key", subscriptionKey);
+            // Create HTTP client for OCR services
+            using var httpClient = new HttpClient();
 
-            // Step 1: Extract OCR data from all images and cache it
-            var allOcrResults = new List<OcrResult>();
+            // Create OCR service factory and get the configured service
+            var ocrFactory = new OcrServiceFactory(ocrConfig, azureConfig, memoryCache, httpClient);
+            var ocrService = ocrFactory.CreateOcrService();
+
+            Console.WriteLine($"\n✓ Using OCR Engine: {ocrService.GetEngineName()}\n");
+
+            // Step 1: Extract OCR data from all images using the configured OCR service
+            var allOcrResults = new List<ImageTextExtractor.Services.Ocr.OcrResult>();
             var combinedMarkdown = new StringBuilder();
 
             foreach (var imageUrl in imageUrls)
             {
                 Console.WriteLine($"\n=== Processing image: {imageUrl} ===");
 
-                // Generate cache key for OCR result
-                var ocrCacheKey = ComputeSimpleCacheKey($"OCR_{imageUrl}");
-                string markdown;
+                var result = await ocrService.ExtractTextAsync(imageUrl);
 
-                // Try to get cached OCR result
-                if (memoryCache.TryGetValue(ocrCacheKey, out var cachedOcr) && cachedOcr is string cachedMarkdown)
+                if (result.Success)
                 {
-                    Console.WriteLine($"Cache hit for OCR data: {imageUrl}");
-                    markdown = cachedMarkdown;
+                    allOcrResults.Add(result);
+                    combinedMarkdown.AppendLine($"### Document: {Path.GetFileName(imageUrl)}");
+                    combinedMarkdown.AppendLine($"**OCR Engine**: {result.Engine}");
+                    combinedMarkdown.AppendLine($"**Processing Time**: {result.ProcessingTime.TotalSeconds:F2}s");
+                    combinedMarkdown.AppendLine();
+                    combinedMarkdown.AppendLine(result.Markdown);
+                    combinedMarkdown.AppendLine("\n---\n");
+
+                    Console.WriteLine($"✓ Success! Extracted {result.PlainText?.Length ?? 0} characters in {result.ProcessingTime.TotalSeconds:F2}s");
                 }
                 else
                 {
-                    Console.WriteLine($"Cache miss - Extracting OCR data from: {imageUrl}");
-                    markdown = await ExtractOcrFromImage(client, endpoint, subscriptionKey, imageUrl);
-
-                    // Cache the OCR result
-                    var ocrCacheOptions = new MemoryCacheEntryOptions
-                    {
-                        AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(30), // OCR results don't change
-                        SlidingExpiration = TimeSpan.FromDays(7)
-                    };
-                    memoryCache.Set(ocrCacheKey, markdown, ocrCacheOptions);
-                    Console.WriteLine($"Cached OCR result for: {imageUrl}");
-                }
-
-                if (!string.IsNullOrEmpty(markdown))
-                {
-                    allOcrResults.Add(new OcrResult { ImageUrl = imageUrl, Markdown = markdown });
-                    combinedMarkdown.AppendLine($"### Document: {Path.GetFileName(imageUrl)}");
-                    combinedMarkdown.AppendLine(markdown);
-                    combinedMarkdown.AppendLine("\n---\n");
+                    Console.WriteLine($"✗ Failed: {result.ErrorMessage}");
                 }
             }
 
             if (allOcrResults.Count == 0)
             {
-                Console.WriteLine("No OCR data extracted. Exiting.");
+                Console.WriteLine("\n✗ No OCR data extracted. Exiting.");
                 return;
             }
 
             // Step 2: Save combined OCR results to OutputFiles directory
             var timestamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
-            var combinedOcrPath = Path.Combine(OutputDirectory, $"combined_ocr_results_{timestamp}.md");
+            var engineName = ocrConfig.Engine.ToLowerInvariant();
+            var combinedOcrPath = Path.Combine(OutputDirectory, $"combined_ocr_results_{engineName}_{timestamp}.md");
             File.WriteAllText(combinedOcrPath, combinedMarkdown.ToString(), Encoding.UTF8);
-            Console.WriteLine($"\nSaved combined OCR results to: {combinedOcrPath}");
+            Console.WriteLine($"\n✓ Saved combined OCR results to: {combinedOcrPath}");
 
             // Step 3: Process with ChatCompletion (with caching)
-            await ProcessWithChatCompletion(memoryCache, config, subscriptionKey, combinedMarkdown.ToString(), timestamp);
-        }
-
-        // Extract OCR data from a single image
-        private static async Task<string> ExtractOcrFromImage(HttpClient client, string endpoint, string subscriptionKey, string imageUrl)
-        {
-            // Prepare the request body for the POST request
-            var requestBody = $"{{\"url\":\"{imageUrl}\"}}";
-            var content = new StringContent(requestBody, Encoding.UTF8, "application/json");
-
-            // Send POST request to start extraction
-            var postResponse = await client.PostAsync(endpoint, content);
-            postResponse.EnsureSuccessStatusCode();
-
-            // Retrieve the Operation-Location header for polling
-            if (!postResponse.Headers.TryGetValues("Operation-Location", out var values))
+            // Only load Azure OpenAI config if not already loaded
+            if (azureConfig == null)
             {
-                Console.WriteLine("Operation-Location header not found. Skipping this image.");
-                return string.Empty;
-            }
-            var operationLocation = values.First();
-            Console.WriteLine($"Operation-Location: {operationLocation}");
-
-            ExtractionOperation? extractionOperation = null;
-            // Poll the operation status until it is 'Succeeded'
-            do
-            {
-                var getRequest = new HttpRequestMessage(HttpMethod.Get, operationLocation);
-                getRequest.Headers.Add("Ocp-Apim-Subscription-Key", subscriptionKey);
-                var getResponse = await client.SendAsync(getRequest);
-                getResponse.EnsureSuccessStatusCode();
-                var result = await getResponse.Content.ReadAsStringAsync();
-
-                extractionOperation = JsonSerializer.Deserialize<ExtractionOperation>(result);
-                if (extractionOperation == null)
-                {
-                    Console.WriteLine("Failed to parse ExtractionOperation. Skipping this image.");
-                    break;
-                }
-                if (extractionOperation.status != "Succeeded")
-                {
-                    Console.WriteLine($"Status: {extractionOperation.status}. Waiting before retry...");
-                    await Task.Delay(3000); // Wait 3 seconds before retrying
-                }
-            } while (extractionOperation?.status != "Succeeded");
-
-            // Return the extracted markdown content
-            if (extractionOperation?.result?.contents != null && extractionOperation.result.contents.Count > 0)
-            {
-                return extractionOperation.result.contents[0].markdown ?? string.Empty;
+                Console.WriteLine("\nLoading Azure AI configuration for LLM processing...");
+                azureConfig = AzureAIConfig.Load();
+                azureConfig.Validate();
             }
 
-            return string.Empty;
+            await ProcessWithChatCompletion(memoryCache, azureConfig, combinedMarkdown.ToString(), timestamp);
+
+            Console.WriteLine("\n=== Processing Complete ===\n");
         }
 
         // Process combined OCR data with ChatCompletion
-        private static async Task ProcessWithChatCompletion(IMemoryCache memoryCache, AzureAIConfig config, string subscriptionKey, string combinedMarkdown, string timestamp)
+        private static async Task ProcessWithChatCompletion(IMemoryCache memoryCache, AzureAIConfig config, string combinedMarkdown, string timestamp)
         {
             Console.WriteLine("\n=== Processing with Azure OpenAI ChatCompletion ===");
 
             // Initialize the AzureOpenAIClient with secure credentials
-            var credential = new ApiKeyCredential(subscriptionKey);
+            var credential = new ApiKeyCredential(config.SubscriptionKey);
             var azureClient = new AzureOpenAIClient(new Uri(config.Endpoint), credential);
 
             // Initialize the ChatClient with the specified deployment name
-            ChatClient chatClient = azureClient.GetChatClient("gpt-4o-mini");
+            ChatClient chatClient = azureClient.GetChatClient(ModelConfig.DeploymentName);
 
             // Process with BOTH versions for comparison
             Console.WriteLine("\n--- Version 1: Schema-Based Extraction ---");
@@ -218,15 +180,8 @@ namespace ImageTextExtractorApp
                     new UserChatMessage(builtPrompt.UserMessage)
                 };
 
-                // Create chat completion options
-                var options = new ChatCompletionOptions
-                {
-                    Temperature = (float)0.7,
-                    MaxOutputTokenCount = 13107,
-                    TopP = (float)0.95,
-                    FrequencyPenalty = (float)0,
-                    PresencePenalty = (float)0,
-                };
+                // Use configured options from ModelConfig
+                var options = CreateChatOptions();
 
                 // Compute a cache key for this combination of messages + options
                 var cacheKey = ComputeCacheKey(messages, options, "v1_combined_documents");
@@ -306,15 +261,8 @@ namespace ImageTextExtractorApp
                     new UserChatMessage(builtPrompt.UserMessage)
                 };
 
-                // Create chat completion options
-                var options = new ChatCompletionOptions
-                {
-                    Temperature = (float)0.7,
-                    MaxOutputTokenCount = 13107,
-                    TopP = (float)0.95,
-                    FrequencyPenalty = (float)0,
-                    PresencePenalty = (float)0,
-                };
+                // Use configured options from ModelConfig
+                var options = CreateChatOptions();
 
                 // Compute a cache key for V2
                 var cacheKey = ComputeCacheKey(messages, options, "v2_dynamic_documents");
@@ -658,101 +606,6 @@ namespace ImageTextExtractorApp
             return "unknown";
         }
 
-        // Extract model text from JsonElement (deserialized completion)
-        private static string ExtractModelTextFromJson(JsonElement completion)
-        {
-            var sb = new StringBuilder();
-
-            // Try to read "Content" property
-            if (completion.TryGetProperty("Content", out var contentProp) || completion.TryGetProperty("content", out contentProp))
-            {
-                if (contentProp.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var part in contentProp.EnumerateArray())
-                    {
-                        if (part.TryGetProperty("Text", out var textProp) || part.TryGetProperty("text", out textProp))
-                        {
-                            sb.AppendLine(textProp.GetString());
-                        }
-                    }
-                }
-                else if (contentProp.ValueKind == JsonValueKind.String)
-                {
-                    sb.AppendLine(contentProp.GetString());
-                }
-            }
-
-            // Try "Choices" property
-            if (completion.TryGetProperty("Choices", out var choicesProp) || completion.TryGetProperty("choices", out choicesProp))
-            {
-                if (choicesProp.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var choice in choicesProp.EnumerateArray())
-                    {
-                        if (choice.TryGetProperty("Message", out var msgProp) || choice.TryGetProperty("message", out msgProp))
-                        {
-                            if (msgProp.TryGetProperty("Content", out var msgContent) || msgProp.TryGetProperty("content", out msgContent))
-                            {
-                                sb.AppendLine(msgContent.GetString());
-                            }
-                        }
-                        else if (choice.TryGetProperty("Text", out var textProp) || choice.TryGetProperty("text", out textProp))
-                        {
-                            sb.AppendLine(textProp.GetString());
-                        }
-                    }
-                }
-            }
-
-            return sb.ToString();
-        }
-
-        // Helper: compute stable cache key from messages + options + identifier
-        private static string ComputeCacheKey(IList<OpenAI.Chat.ChatMessage> messages, ChatCompletionOptions options, string identifier)
-        {
-            var sb = new StringBuilder();
-            sb.Append($"id:{identifier};");
-            sb.Append($"temp:{options.Temperature};maxTokens:{options.MaxOutputTokenCount};topP:{options.TopP};freq:{options.FrequencyPenalty};pres:{options.PresencePenalty};");
-
-            foreach (var m in messages)
-            {
-                var t = m.GetType();
-                string role = "";
-                string content = "";
-                var roleProp = t.GetProperty("Role") ?? t.GetProperty("Author") ?? t.GetProperty("Name");
-                if (roleProp != null)
-                {
-                    try { role = roleProp.GetValue(m)?.ToString() ?? ""; } catch { role = ""; }
-                }
-                var contentProp = t.GetProperty("Content") ?? t.GetProperty("Text") ?? t.GetProperty("Message");
-                if (contentProp != null)
-                {
-                    try { content = contentProp.GetValue(m)?.ToString() ?? ""; } catch { content = ""; }
-                }
-                else
-                {
-                    content = m.ToString() ?? "";
-                }
-
-                sb.Append($"role:{role};content:{content};");
-            }
-
-            // Hash the combined string for compact key
-            using var sha = SHA256.Create();
-            var bytes = Encoding.UTF8.GetBytes(sb.ToString());
-            var hash = sha.ComputeHash(bytes);
-            return Convert.ToHexString(hash);
-        }
-
-        // Simple cache key for OCR results
-        private static string ComputeSimpleCacheKey(string input)
-        {
-            using var sha = SHA256.Create();
-            var bytes = Encoding.UTF8.GetBytes(input);
-            var hash = sha.ComputeHash(bytes);
-            return Convert.ToHexString(hash);
-        }
-
         // Extract model text from completion via reflection (kept for backward compatibility)
         private static string ExtractModelText(object completion)
         {
@@ -816,6 +669,114 @@ namespace ImageTextExtractorApp
             }
 
             return completion.ToString() ?? string.Empty;
+        }
+
+        // Helper: compute stable cache key from messages + options + identifier
+        private static string ComputeCacheKey(IList<OpenAI.Chat.ChatMessage> messages, ChatCompletionOptions options, string identifier)
+        {
+            var sb = new StringBuilder();
+            sb.Append($"id:{identifier};");
+            sb.Append($"temp:{options.Temperature};maxTokens:{options.MaxOutputTokenCount};topP:{options.TopP};freq:{options.FrequencyPenalty};pres:{options.PresencePenalty};");
+
+            foreach (var m in messages)
+            {
+                var t = m.GetType();
+                string role = "";
+                string content = "";
+                var roleProp = t.GetProperty("Role") ?? t.GetProperty("Author") ?? t.GetProperty("Name");
+                if (roleProp != null)
+                {
+                    try { role = roleProp.GetValue(m)?.ToString() ?? ""; } catch { role = ""; }
+                }
+                var contentProp = t.GetProperty("Content") ?? t.GetProperty("Text") ?? t.GetProperty("Message");
+                if (contentProp != null)
+                {
+                    try { content = contentProp.GetValue(m)?.ToString() ?? ""; } catch { content = ""; }
+                }
+                else
+                {
+                    content = m.ToString() ?? "";
+                }
+
+                sb.Append($"role:{role};content:{content};");
+            }
+
+            // Hash the combined string for compact key
+            using var sha = SHA256.Create();
+            var bytes = Encoding.UTF8.GetBytes(sb.ToString());
+            var hash = sha.ComputeHash(bytes);
+            return Convert.ToHexString(hash);
+        }
+
+        // Simple cache key for OCR results
+        private static string ComputeSimpleCacheKey(string input)
+        {
+            using var sha = SHA256.Create();
+            var bytes = Encoding.UTF8.GetBytes(input);
+            var hash = sha.ComputeHash(bytes);
+            return Convert.ToHexString(hash);
+        }
+
+        // Extract model text from completion via reflection (kept for backward compatibility)
+        private static string ExtractModelTextFromJson(JsonElement completion)
+        {
+            var sb = new StringBuilder();
+
+            // Try to read "Content" property
+            if (completion.TryGetProperty("Content", out var contentProp) || completion.TryGetProperty("content", out contentProp))
+            {
+                if (contentProp.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var part in contentProp.EnumerateArray())
+                    {
+                        if (part.TryGetProperty("Text", out var textProp) || part.TryGetProperty("text", out textProp))
+                        {
+                            sb.AppendLine(textProp.GetString());
+                        }
+                    }
+                }
+                else if (contentProp.ValueKind == JsonValueKind.String)
+                {
+                    sb.AppendLine(contentProp.GetString());
+                }
+            }
+
+            // Try "Choices" property
+            if (completion.TryGetProperty("Choices", out var choicesProp) || completion.TryGetProperty("choices", out choicesProp))
+            {
+                if (choicesProp.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var choice in choicesProp.EnumerateArray())
+                    {
+                        if (choice.TryGetProperty("Message", out var msgProp) || choice.TryGetProperty("message", out msgProp))
+                        {
+                            if (msgProp.TryGetProperty("Content", out var msgContent) || msgProp.TryGetProperty("content", out msgContent))
+                            {
+                                sb.AppendLine(msgContent.GetString());
+                            }
+                        }
+                        else if (choice.TryGetProperty("Text", out var textProp) || choice.TryGetProperty("text", out textProp))
+                        {
+                            sb.AppendLine(textProp.GetString());
+                        }
+                    }
+                }
+            }
+
+            return sb.ToString();
+        }
+
+        // Create chat completion options
+        private static ChatCompletionOptions CreateChatOptions()
+        {
+            return new ChatCompletionOptions
+            {
+                Temperature = ModelConfig.Temperature,
+                MaxOutputTokenCount = ModelConfig.MaxTokens,
+                TopP = ModelConfig.TopP,
+                FrequencyPenalty = ModelConfig.FrequencyPenalty,
+                PresencePenalty = ModelConfig.PresencePenalty,
+            };
         }
 
         // Extract JSON objects/arrays from arbitrary text by detecting balanced braces/brackets
@@ -944,19 +905,6 @@ namespace ImageTextExtractorApp
             }
 
             return string.Empty;
-        }
-
-        // Legacy method kept for compatibility (now calls CleanAndReturnJson internally)
-        private static void CleanAndSaveJson(List<string> jsonStrings)
-        {
-            var cleanedJson = CleanAndReturnJson(jsonStrings);
-            if (!string.IsNullOrEmpty(cleanedJson))
-            {
-                var filename = $"cleaned_output_{DateTime.UtcNow:yyyyMMddHHmmssfff}.json";
-                var outPath = Path.Combine(OutputDirectory, filename);
-                File.WriteAllText(outPath, cleanedJson, Encoding.UTF8);
-                Console.WriteLine($"Wrote cleaned JSON to: {outPath}");
-            }
         }
     }
 
