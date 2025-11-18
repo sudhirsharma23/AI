@@ -7,7 +7,8 @@ namespace TextractProcessor.Configuration
     /// </summary>
     public class OcrConfig
     {
-        public string Engine { get; set; } = "Aspose"; // Default: AWS Textract
+        // Default to AWS Textract (keep Bedrock as an accepted alias)
+        public string Engine { get; set; } = "Textract";
         public string AsposeLicensePath { get; set; } = "Aspose.Total.NET.lic";
         public bool EnableCaching { get; set; } = true;
         public int CacheDurationDays { get; set; } = 30;
@@ -19,7 +20,7 @@ namespace TextractProcessor.Configuration
         {
             return new OcrConfig
             {
-                Engine = Environment.GetEnvironmentVariable("OCR_ENGINE") ?? "Aspose",
+                Engine = Environment.GetEnvironmentVariable("OCR_ENGINE") ?? "Textract",
                 AsposeLicensePath = Environment.GetEnvironmentVariable("ASPOSE_LICENSE_PATH") ?? "Aspose.Total.NET.lic",
                 EnableCaching = bool.Parse(Environment.GetEnvironmentVariable("OCR_ENABLE_CACHING") ?? "true"),
                 CacheDurationDays = int.Parse(Environment.GetEnvironmentVariable("OCR_CACHE_DURATION_DAYS") ?? "30")
@@ -27,9 +28,10 @@ namespace TextractProcessor.Configuration
         }
 
         /// <summary>
-        /// Check if AWS Textract is enabled
+        /// Check if AWS Textract (or Bedrock alias) is enabled
         /// </summary>
-        public bool IsTextractEnabled => Engine.Equals("Textract", StringComparison.OrdinalIgnoreCase);
+        public bool IsTextractEnabled => Engine.Equals("Textract", StringComparison.OrdinalIgnoreCase)
+                                     || Engine.Equals("Bedrock", StringComparison.OrdinalIgnoreCase);
 
         /// <summary>
         /// Check if Aspose OCR is enabled
@@ -43,12 +45,12 @@ namespace TextractProcessor.Configuration
         {
             if (string.IsNullOrWhiteSpace(Engine))
             {
-                throw new InvalidOperationException("OCR_ENGINE must be configured (Textract or Aspose)");
+                throw new InvalidOperationException("OCR_ENGINE must be configured (Textract, Bedrock, or Aspose)");
             }
 
             if (!IsTextractEnabled && !IsAsposeEnabled)
             {
-                throw new InvalidOperationException($"Unknown OCR engine: {Engine}. Supported values: Textract, Aspose");
+                throw new InvalidOperationException($"Unknown OCR engine: {Engine}. Supported values: Textract, Bedrock, Aspose");
             }
 
             if (IsAsposeEnabled && string.IsNullOrWhiteSpace(AsposeLicensePath))
@@ -58,7 +60,7 @@ namespace TextractProcessor.Configuration
 
             if (CacheDurationDays < 0)
             {
-                throw new InvalidOperationException("OCR_CACHE_DURATION_DAYS must be >= 0");
+                throw new InvalidOperationException("OCR_CACHE_DURATION_DAYS must be >=0");
             }
         }
     }
