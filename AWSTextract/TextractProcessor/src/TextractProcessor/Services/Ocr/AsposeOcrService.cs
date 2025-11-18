@@ -5,6 +5,8 @@ using Microsoft.Extensions.Caching.Memory;
 using System.Text;
 using TextractProcessor.Configuration;
 using TextractProcessor.Services.Ocr;
+using System.Reflection;
+using System.Collections;
 
 namespace TextractProcessor.Services.Ocr
 {
@@ -78,46 +80,65 @@ namespace TextractProcessor.Services.Ocr
                     // Handle multi-page TIFFs explicitly
                     if (extension == ".tif" || extension == ".tiff")
                     {
-                        // Use TIFF input type to process multi-page TIFF files
-                        var ocrInput = new OcrInput(Aspose.OCR.InputType.TIFF);
-                        ocrInput.Add(filePath);
-
-                        var ocrResults = await Task.Run(() => _ocrEngine.Recognize(ocrInput));
-
-                        var sb = new StringBuilder();
-                        if (ocrResults != null && ocrResults.Count > 0)
+                        // Try handwritten recognition first
+                        var hwText = TryRecognizeHandwritten(filePath);
+                        if (!string.IsNullOrEmpty(hwText))
                         {
-                            for (int i = 0; i < ocrResults.Count; i++)
+                            extractedText = hwText;
+                            resultMetadataPageCount = 1; // unsure of pages from handwritten API
+                        }
+                        else
+                        {
+                            // Use TIFF input type to process multi-page TIFF files
+                            var ocrInput = new OcrInput(Aspose.OCR.InputType.TIFF);
+                            ocrInput.Add(filePath);
+
+                            var ocrResults = await Task.Run(() => _ocrEngine.Recognize(ocrInput));
+
+                            var sb = new StringBuilder();
+                            if (ocrResults != null && ocrResults.Count > 0)
                             {
-                                var pageText = ocrResults[i]?.RecognitionText ?? string.Empty;
-                                sb.AppendLine($"--- Page {i + 1} ---");
-                                sb.AppendLine(pageText);
-                                sb.AppendLine();
+                                for (int i = 0; i < ocrResults.Count; i++)
+                                {
+                                    var pageText = ocrResults[i]?.RecognitionText ?? string.Empty;
+                                    sb.AppendLine($"--- Page {i + 1} ---");
+                                    sb.AppendLine(pageText);
+                                    sb.AppendLine();
+                                }
+
+                                // Record page count based on OCR results
+                                resultMetadataPageCount = ocrResults.Count;
                             }
 
-                            // Record page count based on OCR results
-                            resultMetadataPageCount = ocrResults.Count;
+                            extractedText = sb.ToString();
                         }
-
-                        extractedText = sb.ToString();
 
                         // tableData remains empty unless further parsing is implemented
                     }
                     else
                     {
                         // Use Aspose.OCR for single-image files
-                        var ocrInput = new OcrInput(Aspose.OCR.InputType.SingleImage);
-                        ocrInput.Add(filePath);
-
-                        var ocrResults = await Task.Run(() => _ocrEngine.Recognize(ocrInput));
-
-                        if (ocrResults != null && ocrResults.Count > 0)
+                        // Try handwritten recognition first
+                        var hwText = TryRecognizeHandwritten(filePath);
+                        if (!string.IsNullOrEmpty(hwText))
                         {
-                            extractedText = ocrResults[0].RecognitionText;
+                            extractedText = hwText;
                         }
                         else
                         {
-                            extractedText = string.Empty;
+                            var ocrInput = new OcrInput(Aspose.OCR.InputType.SingleImage);
+                            ocrInput.Add(filePath);
+
+                            var ocrResults = await Task.Run(() => _ocrEngine.Recognize(ocrInput));
+
+                            if (ocrResults != null && ocrResults.Count > 0)
+                            {
+                                extractedText = ocrResults[0].RecognitionText;
+                            }
+                            else
+                            {
+                                extractedText = string.Empty;
+                            }
                         }
                     }
                 }
@@ -422,6 +443,135 @@ namespace TextractProcessor.Services.Ocr
             var bytes = System.Text.Encoding.UTF8.GetBytes(input);
             var hash = sha256.ComputeHash(bytes);
             return Convert.ToHexString(hash);
+        }
+
+        /// <summary>
+        /// Attempt to use Aspose OCR RecognitionEngine handwritten methods via reflection.
+        /// Returns recognized text or null on failure/not available.
+        /// </summary>
+        private string TryRecognizeHandwritten(string filePath)
+        {
+            try
+            {
+                var asm = typeof(AsposeOcr).Assembly; // Aspose.OCR assembly
+                var recType = asm.GetType("Aspose.OCR.RecognitionEngine") ?? asm.GetTypes().FirstOrDefault(t => t.Name == "RecognitionEngine");
+                if (recType == null) return null;
+
+                var instance = Activator.CreateInstance(recType);
+                if (instance == null) return null;
+
+                // Try to find a method that mentions 'Hand' (handwritten) or Accepts a string/path
+                var methods = recType.GetMethods(BindingFlags.Public | BindingFlags.Instance);
+
+                // Prefer explicit handwritten methods
+                var hwMethod = methods.FirstOrDefault(m => m.Name.IndexOf("hand", StringComparison.OrdinalIgnoreCase) >= 0);
+                if (hwMethod != null)
+                {
+                    var parameters = hwMethod.GetParameters();
+                    object result = null;
+
+                    if (parameters.Length == 1 && parameters[0].ParameterType == typeof(string))
+                    {
+                        result = hwMethod.Invoke(instance, new object[] { filePath });
+                    }
+                    else if (parameters.Length == 1 && parameters[0].ParameterType.Name.IndexOf("OcrInput", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        var ocrInputCtor = asm.GetType("Aspose.OCR.OcrInput")?.GetConstructor(new[] { typeof(Aspose.OCR.InputType) });
+                        object ocrInput = null;
+                        if (ocrInputCtor != null)
+                        {
+                            // Try SingleImage as generic
+                            ocrInput = Activator.CreateInstance(asm.GetType("Aspose.OCR.OcrInput"), new object[] { Aspose.OCR.InputType.SingleImage });
+                            var addMethod = ocrInput.GetType().GetMethod("Add", new[] { typeof(string) });
+                            addMethod?.Invoke(ocrInput, new object[] { filePath });
+                        }
+
+                        if (ocrInput != null) result = hwMethod.Invoke(instance, new object[] { ocrInput });
+                    }
+
+                    if (result != null)
+                    {
+                        // Try to extract text
+                        var textProp = result.GetType().GetProperty("RecognitionText") ?? result.GetType().GetProperty("Text") ?? result.GetType().GetProperty("Result");
+                        if (textProp != null)
+                        {
+                            return textProp.GetValue(result)?.ToString();
+                        }
+
+                        // If result is enumerable, aggregate
+                        if (result is IEnumerable enumerable)
+                        {
+                            var sb = new StringBuilder();
+                            foreach (var item in enumerable)
+                            {
+                                var p = item?.GetType().GetProperty("RecognitionText") ?? item?.GetType().GetProperty("Text");
+                                if (p != null) sb.AppendLine(p.GetValue(item)?.ToString());
+                                else if (item != null) sb.AppendLine(item.ToString());
+                            }
+                            var agg = sb.ToString();
+                            if (!string.IsNullOrWhiteSpace(agg)) return agg;
+                        }
+
+                        // Fallback to ToString
+                        var s = result.ToString();
+                        if (!string.IsNullOrWhiteSpace(s)) return s;
+                    }
+                }
+
+                // If no explicit handwritten method, try recognition engine Recognize overloads
+                var recognizeMethod = methods.FirstOrDefault(m => m.Name.Equals("Recognize", StringComparison.OrdinalIgnoreCase));
+                if (recognizeMethod != null)
+                {
+                    var parameters = recognizeMethod.GetParameters();
+                    object result = null;
+
+                    if (parameters.Length == 1 && parameters[0].ParameterType == typeof(string))
+                    {
+                        result = recognizeMethod.Invoke(instance, new object[] { filePath });
+                    }
+                    else if (parameters.Length == 1 && parameters[0].ParameterType.Name.IndexOf("OcrInput", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        var ocrInputCtor = asm.GetType("Aspose.OCR.OcrInput")?.GetConstructor(new[] { typeof(Aspose.OCR.InputType) });
+                        if (ocrInputCtor != null)
+                        {
+                            var ocrInput = Activator.CreateInstance(asm.GetType("Aspose.OCR.OcrInput"), new object[] { Aspose.OCR.InputType.SingleImage });
+                            var addMethod = ocrInput.GetType().GetMethod("Add", new[] { typeof(string) });
+                            addMethod?.Invoke(ocrInput, new object[] { filePath });
+                            result = recognizeMethod.Invoke(instance, new object[] { ocrInput });
+                        }
+                    }
+
+                    if (result != null)
+                    {
+                        // similar extraction as above
+                        var textProp = result.GetType().GetProperty("RecognitionText") ?? result.GetType().GetProperty("Text");
+                        if (textProp != null) return textProp.GetValue(result)?.ToString();
+
+                        if (result is IEnumerable enumerable)
+                        {
+                            var sb = new StringBuilder();
+                            foreach (var item in enumerable)
+                            {
+                                var p = item?.GetType().GetProperty("RecognitionText") ?? item?.GetType().GetProperty("Text");
+                                if (p != null) sb.AppendLine(p.GetValue(item)?.ToString());
+                                else if (item != null) sb.AppendLine(item.ToString());
+                            }
+                            var agg = sb.ToString();
+                            if (!string.IsNullOrWhiteSpace(agg)) return agg;
+                        }
+
+                        var s = result.ToString();
+                        if (!string.IsNullOrWhiteSpace(s)) return s;
+                    }
+                }
+
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Aspose handwritten recognition attempt failed: {ex.Message}");
+            }
+
+            return null;
         }
     }
 }
