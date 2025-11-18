@@ -62,6 +62,7 @@ namespace TextractProcessor.Services.Ocr
                 string extractedText;
                 var formFields = new Dictionary<string, string>();
                 var tableData = new List<List<string>>();
+                int? resultMetadataPageCount = null; // Track page count from OCR results
 
                 // Determine file type and process accordingly
                 var extension = Path.GetExtension(filePath).ToLowerInvariant();
@@ -74,19 +75,50 @@ namespace TextractProcessor.Services.Ocr
                 }
                 else if (new[] { ".tif", ".tiff", ".jpg", ".jpeg", ".png", ".bmp", ".gif" }.Contains(extension))
                 {
-                    // Use Aspose.OCR for image files
-                    var ocrInput = new OcrInput(InputType.SingleImage);
-                    ocrInput.Add(filePath);
-
-                    var ocrResults = await Task.Run(() => _ocrEngine.Recognize(ocrInput));
-
-                    if (ocrResults != null && ocrResults.Count > 0)
+                    // Handle multi-page TIFFs explicitly
+                    if (extension == ".tif" || extension == ".tiff")
                     {
-                        extractedText = ocrResults[0].RecognitionText;
+                        // Use TIFF input type to process multi-page TIFF files
+                        var ocrInput = new OcrInput(Aspose.OCR.InputType.TIFF);
+                        ocrInput.Add(filePath);
+
+                        var ocrResults = await Task.Run(() => _ocrEngine.Recognize(ocrInput));
+
+                        var sb = new StringBuilder();
+                        if (ocrResults != null && ocrResults.Count > 0)
+                        {
+                            for (int i = 0; i < ocrResults.Count; i++)
+                            {
+                                var pageText = ocrResults[i]?.RecognitionText ?? string.Empty;
+                                sb.AppendLine($"--- Page {i + 1} ---");
+                                sb.AppendLine(pageText);
+                                sb.AppendLine();
+                            }
+
+                            // Record page count based on OCR results
+                            resultMetadataPageCount = ocrResults.Count;
+                        }
+
+                        extractedText = sb.ToString();
+
+                        // tableData remains empty unless further parsing is implemented
                     }
                     else
                     {
-                        extractedText = string.Empty;
+                        // Use Aspose.OCR for single-image files
+                        var ocrInput = new OcrInput(Aspose.OCR.InputType.SingleImage);
+                        ocrInput.Add(filePath);
+
+                        var ocrResults = await Task.Run(() => _ocrEngine.Recognize(ocrInput));
+
+                        if (ocrResults != null && ocrResults.Count > 0)
+                        {
+                            extractedText = ocrResults[0].RecognitionText;
+                        }
+                        else
+                        {
+                            extractedText = string.Empty;
+                        }
                     }
                 }
                 else
@@ -110,6 +142,15 @@ namespace TextractProcessor.Services.Ocr
             { "TextLength", extractedText?.Length ?? 0 }
           }
                 };
+
+                // If multi-page TIFF add page count to metadata (set earlier from OCR results)
+                if ((extension == ".tif" || extension == ".tiff") && !string.IsNullOrEmpty(extractedText))
+                {
+                    if (resultMetadataPageCount.HasValue)
+                    {
+                        result.Metadata["PageCount"] = resultMetadataPageCount.Value;
+                    }
+                }
 
                 // Cache the result
                 if (_ocrConfig.EnableCaching && result.Success)
@@ -198,25 +239,154 @@ namespace TextractProcessor.Services.Ocr
 
                 try
                 {
-                    var licensePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, _ocrConfig.AsposeLicensePath);
+                    // Build candidate license file names
+                    var configuredPath = _ocrConfig.AsposeLicensePath;
+                    var candidates = new List<string>();
 
-                    if (!File.Exists(licensePath))
+                    if (!string.IsNullOrWhiteSpace(configuredPath))
                     {
-                        Console.WriteLine($"⚠ Aspose license file not found at: {licensePath}");
-                        Console.WriteLine("  Aspose will run in evaluation mode with limitations.");
-                        return;
+                        // If absolute path was provided, try it directly
+                        if (Path.IsPathRooted(configuredPath))
+                        {
+                            candidates.Add(configuredPath);
+                        }
+                        else
+                        {
+                            // Try common base directories
+                            var baseDirs = new[]
+ {
+ AppDomain.CurrentDomain.BaseDirectory,
+ AppContext.BaseDirectory,
+ Directory.GetCurrentDirectory()
+ };
+
+                            foreach (var baseDir in baseDirs.Where(d => !string.IsNullOrWhiteSpace(d)))
+                            {
+                                candidates.Add(Path.Combine(baseDir, configuredPath));
+                            }
+                        }
                     }
 
-                    // Set license for Aspose.OCR
-                    var ocrLicense = new Aspose.OCR.License();
-                    ocrLicense.SetLicense(licensePath);
+                    // Also try default filenames in common locations
+                    var defaultNames = new[] { "Aspose.Total.NET.lic", "Aspose.Total.lic" };
+                    var searchDirs = new[]
+ {
+ AppDomain.CurrentDomain.BaseDirectory,
+ AppContext.BaseDirectory,
+ Directory.GetCurrentDirectory(),
+ Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Licenses")
+ };
 
-                    // Set license for Aspose.PDF
-                    var pdfLicense = new Aspose.Pdf.License();
-                    pdfLicense.SetLicense(licensePath);
+                    foreach (var name in defaultNames)
+                    {
+                        foreach (var dir in searchDirs.Where(d => !string.IsNullOrWhiteSpace(d)))
+                        {
+                            candidates.Add(Path.Combine(dir, name));
+                        }
+                    }
 
-                    _licenseSet = true;
-                    Console.WriteLine($"✓ Aspose license loaded successfully from: {Path.GetFileName(licensePath)}");
+                    // Deduplicate candidates preserving order
+                    candidates = candidates.Where(c => !string.IsNullOrWhiteSpace(c)).Select(Path.GetFullPath).Distinct().ToList();
+
+                    Console.WriteLine("Aspose license search candidates:");
+                    foreach (var c in candidates)
+                    {
+                        Console.WriteLine($" - {c}");
+                    }
+
+                    string found = null;
+
+                    foreach (var candidate in candidates)
+                    {
+                        try
+                        {
+                            if (File.Exists(candidate))
+                            {
+                                // Try to set license using path first
+                                Console.WriteLine($"Attempting to set Aspose license from: {candidate}");
+
+                                // Aspose OCR license
+                                try
+                                {
+                                    var ocrLicense = new Aspose.OCR.License();
+                                    ocrLicense.SetLicense(candidate);
+                                }
+                                catch (Exception ocrEx)
+                                {
+                                    Console.WriteLine($"Aspose.OCR.SetLicense failed for {candidate}: {ocrEx.Message}");
+                                }
+
+                                // Aspose.PDF license
+                                try
+                                {
+                                    var pdfLicense = new Aspose.Pdf.License();
+                                    pdfLicense.SetLicense(candidate);
+                                }
+                                catch (Exception pdfEx)
+                                {
+                                    Console.WriteLine($"Aspose.PDF.SetLicense failed for {candidate}: {pdfEx.Message}");
+                                }
+
+                                // If no exception thrown above set found
+                                found = candidate;
+                                break;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Error while checking license candidate {candidate}: {ex.Message}");
+                        }
+                    }
+
+                    // As a fallback, attempt to load license from embedded resource names
+                    if (found == null)
+                    {
+                        var asm = System.Reflection.Assembly.GetExecutingAssembly();
+                        var resources = asm.GetManifestResourceNames();
+                        Console.WriteLine("Embedded resources: " + string.Join(", ", resources));
+
+                        foreach (var name in resources)
+                        {
+                            if (name.EndsWith("Aspose.Total.NET.lic", StringComparison.OrdinalIgnoreCase) ||
+                                name.EndsWith("Aspose.Total.lic", StringComparison.OrdinalIgnoreCase))
+                            {
+                                Console.WriteLine($"Attempting to set Aspose license from embedded resource: {name}")
+;
+                                try
+                                {
+                                    using var stream = asm.GetManifestResourceStream(name);
+                                    if (stream != null)
+                                    {
+                                        var ocrLicense = new Aspose.OCR.License();
+                                        ocrLicense.SetLicense(stream);
+
+                                        stream.Position = 0; // reset for next reader
+
+                                        var pdfLicense = new Aspose.Pdf.License();
+                                        pdfLicense.SetLicense(stream);
+
+                                        found = name;
+                                        break;
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    Console.WriteLine($"Failed to set license from embedded resource {name}: {ex.Message}");
+                                }
+                            }
+                        }
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(found))
+                    {
+                        _licenseSet = true;
+                        Console.WriteLine($"✓ Aspose license loaded successfully from: {Path.GetFileName(found)}");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"⚠ Aspose license file not found. Attempted {candidates.Count} locations.");
+                        Console.WriteLine("Aspose will run in evaluation mode with limitations.");
+                    }
                 }
                 catch (Exception ex)
                 {

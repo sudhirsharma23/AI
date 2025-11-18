@@ -13,6 +13,8 @@ using System.Text;
 using Microsoft.Extensions.Caching.Memory;
 using TextractProcessor.Services;
 using TextractProcessor.Models;
+using TextractProcessor.Configuration;
+using TextractProcessor.Services.Ocr;
 
 [assembly: LambdaSerializer(typeof(Amazon.Lambda.Serialization.SystemTextJson.DefaultLambdaJsonSerializer))]
 
@@ -28,6 +30,9 @@ namespace TextractProcessor
         private readonly SchemaMapperService _schemaMapper;
         private readonly IMemoryCache _cache;
         private readonly TextractCacheService _textractCache;
+        private readonly OcrConfig _ocrConfig;
+        private readonly OcrServiceFactory _ocrFactory;
+        private readonly IOcrService _ocrService;
 
         private const string BucketName = "testbucket-sudhir-bsi1";
         private const string TextractRoleArn = "arn:aws:iam::912532823432:role/accesstextract-role";
@@ -38,8 +43,8 @@ namespace TextractProcessor
         private const string UploadDate = "2025-11-10"; // Change this to match your upload date
         private static readonly string[] DocumentKeys = new[]
         {
-            $"uploads/{UploadDate}/2025000065660/2025000065660.tif",
-            $"uploads/{UploadDate}/2025000065660-1/2025000065660-1.tif"
+             $"uploads/{UploadDate}/2025000065660/2025000065660.tif",
+             $"uploads/{UploadDate}/2025000065660-1/2025000065660-1.tif"
         };
 
         private const int MaxRetries = 60;
@@ -67,6 +72,20 @@ namespace TextractProcessor
             //var bedrockService = new BedrockService(bedrockClient, _cache, modelConfig);
 
             _schemaMapper = new SchemaMapperService(bedrockService, _cache, OutputDirectory);
+
+            // Load OCR configuration and setup OCR service factory
+            _ocrConfig = OcrConfig.Load();
+            try
+            {
+                _ocrConfig.Validate();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Warning: OCR configuration validation failed: {ex.Message}");
+            }
+
+            _ocrFactory = new OcrServiceFactory(_ocrConfig, _s3Client, _textractClient, _cache, _textractCache, TextractRoleArn, SnsTopicArn);
+            _ocrService = _ocrFactory.CreateOcrService();
 
             Directory.CreateDirectory(OutputDirectory);
         }
@@ -157,39 +176,50 @@ namespace TextractProcessor
                 foreach (var documentKey in DocumentKeys)
                 {
                     LogEvent(context, $"Starting document processing for {documentKey}", additionalData: new Dictionary<string, object>
-  {
-  { "DocumentKey", documentKey },
-         { "Bucket", BucketName }
-            });
+                     {
+                     { "DocumentKey", documentKey },
+                     { "Bucket", BucketName }
+                    });
 
-                    // Try to get cached Textract response
-                    var textractResponse = await _textractCache.GetCachedResponse(documentKey);
+                    TextractResponse textractResponse = null;
 
-                    if (textractResponse == null)
+                    // If Aspose is configured, use the configured OCR service (Aspose) and fallback to Textract otherwise
+                    if (_ocrConfig != null && _ocrConfig.IsAsposeEnabled)
                     {
-                        LogEvent(context, $"Cache miss - processing {documentKey} with Textract");
-                        textractResponse = await ProcessTextract(documentKey, context);
-
-                        if (textractResponse.JobStatus != "SUCCEEDED")
-                        {
-                            LogEvent(context, $"Textract processing failed for {documentKey}", "ERROR", new Dictionary<string, object>
-      {
-   { "Error", textractResponse.ErrorMessage }
-      });
-                            return new ProcessingResult
-                            {
-                                Success = false,
-                                Error = $"Failed to process {documentKey}: {textractResponse.ErrorMessage}"
-                            };
-                        }
-
-                        LogMetric(context, "TextractProcessingTime", (DateTime.UtcNow - startTime).TotalMilliseconds);
-                        await _textractCache.CacheTextractResponse(documentKey, textractResponse);
+                        LogEvent(context, $"Using configured OCR engine: {_ocrConfig.Engine}");
+                        textractResponse = await ProcessUsingConfiguredOcr(documentKey, context);
                     }
                     else
                     {
-                        LogEvent(context, $"Using cached Textract response for {documentKey}");
-                        LogMetric(context, "CacheHit", 1);
+                        // Try to get cached Textract response
+                        textractResponse = await _textractCache.GetCachedResponse(documentKey);
+
+                        if (textractResponse == null)
+                        {
+                            LogEvent(context, $"Cache miss - processing {documentKey} with Textract");
+                            textractResponse = await ProcessTextract(documentKey, context);
+
+                            if (textractResponse.JobStatus != "SUCCEEDED")
+                            {
+                                LogEvent(context, $"Textract processing failed for {documentKey}", "ERROR", new Dictionary<string, object>
+ {
+ { "Error", textractResponse.ErrorMessage }
+ });
+                                return new ProcessingResult
+                                {
+                                    Success = false,
+                                    Error = $"Failed to process {documentKey}: {textractResponse.ErrorMessage}"
+                                };
+                            }
+
+                            LogMetric(context, "TextractProcessingTime", (DateTime.UtcNow - startTime).TotalMilliseconds);
+                            await _textractCache.CacheTextractResponse(documentKey, textractResponse);
+                        }
+                        else
+                        {
+                            LogEvent(context, $"Using cached Textract response for {documentKey}");
+                            LogMetric(context, "CacheHit", 1);
+                        }
                     }
 
                     allResponses.Add(textractResponse);
@@ -199,12 +229,12 @@ namespace TextractProcessor
                     {
                         RawText = textractResponse.RawText,
                         FormFields = textractResponse.FormData
-                       .SelectMany(dict => dict)
-                   .GroupBy(kvp => kvp.Key)
-            .ToDictionary(
-                     g => g.Key,
-                     g => string.Join(" | ", g.Select(x => x.Value).Distinct())
-                      ),
+                    .SelectMany(dict => dict)
+                    .GroupBy(kvp => kvp.Key)
+                    .ToDictionary(
+                    g => g.Key,
+                    g => string.Join(" | ", g.Select(x => x.Value).Distinct())
+                    ),
                         TableData = ExtractTableText(textractResponse.TableData)
                     };
 
@@ -213,17 +243,17 @@ namespace TextractProcessor
 
                 // Process merged responses with schema mapper
                 LogEvent(context, "Processing merged documents with Bedrock", additionalData: new Dictionary<string, object>
-        {
-            { "DocumentCount", textractResponses.Count },
-         { "TotalFormFields", textractResponses.Sum(r => r.FormFields.Count) },
-       { "TotalTables", textractResponses.Sum(r => r.TableData.Count) }
-     });
+ {
+ { "DocumentCount", textractResponses.Count },
+ { "TotalFormFields", textractResponses.Sum(r => r.FormFields.Count) },
+ { "TotalTables", textractResponses.Sum(r => r.TableData.Count) }
+ });
 
                 var result = await _schemaMapper.ProcessAndMapSchema(
-           textractResponses,
-          string.Empty,
-          "merged_documents"
-          );
+                textractResponses,
+                string.Empty,
+                "merged_documents"
+                );
 
                 var processingTime = (DateTime.UtcNow - startTime).TotalMilliseconds;
                 LogMetric(context, "TotalProcessingTime", processingTime);
@@ -231,23 +261,23 @@ namespace TextractProcessor
                 LogMetric(context, "OutputTokens", result.OutputTokens);
 
                 LogEvent(context, "Processing completed", additionalData: new Dictionary<string, object>
-      {
-      { "ProcessingTimeMs", processingTime },
-            { "InputTokens", result.InputTokens },
-            { "OutputTokens", result.OutputTokens },
-            { "Cost", result.TotalCost },
-  { "OutputFile", result.MappedFilePath }
-        });
+ {
+ { "ProcessingTimeMs", processingTime },
+ { "InputTokens", result.InputTokens },
+ { "OutputTokens", result.OutputTokens },
+ { "Cost", result.TotalCost },
+ { "OutputFile", result.MappedFilePath }
+ });
 
                 return result;
             }
             catch (Exception e)
             {
                 LogEvent(context, "Processing failed", "ERROR", new Dictionary<string, object>
-        {
-     { "Error", e.Message },
-   { "StackTrace", e.StackTrace }
-   });
+ {
+ { "Error", e.Message },
+ { "StackTrace", e.StackTrace }
+ });
 
                 return new ProcessingResult
                 {
@@ -264,21 +294,112 @@ namespace TextractProcessor
             foreach (var tableDict in tableDictionaries)
             {
                 if (tableDict.TryGetValue("Cells", out var cellsObj) &&
-      cellsObj is List<Dictionary<string, string>> cells)
+                cellsObj is List<Dictionary<string, string>> cells)
                 {
                     var tableRows = cells
-              .GroupBy(c => int.Parse(c["RowIndex"]))
-                 .OrderBy(g => g.Key)
-                  .Select(g => g.OrderBy(c => int.Parse(c["ColumnIndex"]))
-                 .Select(c => c["Text"])
-                   .ToList())
-             .ToList();
+                    .GroupBy(c => int.Parse(c["RowIndex"]))
+                    .OrderBy(g => g.Key)
+                    .Select(g => g.OrderBy(c => int.Parse(c["ColumnIndex"]))
+                    .Select(c => c["Text"])
+                    .ToList())
+                    .ToList();
 
                     tableTexts.Add(tableRows.SelectMany(row => row).ToList());
                 }
             }
 
             return tableTexts;
+        }
+
+        /// <summary>
+        /// New processing path that uses configured OCR (Aspose) by downloading the S3 object to a temp file and calling the IOcrService.
+        /// </summary>
+        private async Task<TextractResponse> ProcessUsingConfiguredOcr(string documentKey, ILambdaContext context)
+        {
+            var start = DateTime.UtcNow;
+            var jobId = Guid.NewGuid().ToString();
+
+            var tempFile = Path.Combine(Path.GetTempPath(), Path.GetFileName(documentKey));
+
+            try
+            {
+                // Download S3 object to temp file
+                using (var s3Response = await _s3Client.GetObjectAsync(BucketName, documentKey))
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(tempFile));
+                    await using (var responseStream = s3Response.ResponseStream)
+                    await using (var fs = File.Create(tempFile))
+                    {
+                        await responseStream.CopyToAsync(fs);
+                    }
+                }
+
+                // Call configured OCR service (Aspose)
+                var ocrResult = await _ocrService.ExtractTextFromFileAsync(tempFile);
+
+                var response = new TextractResponse
+                {
+                    JobId = jobId,
+                    JobStatus = ocrResult.Success ? "SUCCEEDED" : "FAILED",
+                    FormData = ocrResult.FormFields != null ? new List<Dictionary<string, string>> { ocrResult.FormFields } : new List<Dictionary<string, string>>(),
+                    TableData = new List<Dictionary<string, object>>(),
+                    Pages = new List<PageInfo>(),
+                    RawText = ocrResult.RawText ?? string.Empty,
+                    ErrorMessage = ocrResult.Success ? null : ocrResult.ErrorMessage
+                };
+
+                // Simple conversion of table lists (if present) into placeholder table objects
+                if (ocrResult.TableData != null && ocrResult.TableData.Count > 0)
+                {
+                    // Treat the entire OcrResult.TableData as a single table where each inner list is a row
+                    var rows = ocrResult.TableData;
+                    var rowCount = rows.Count;
+                    var colCount = (rows.FirstOrDefault() != null) ? rows.First().Count : 0;
+
+                    var tableDict = new Dictionary<string, object>
+ {
+ { "TableId", Guid.NewGuid().ToString() },
+ { "Rows", rowCount },
+ { "Columns", colCount },
+ { "Cells", new List<Dictionary<string, string>>() }
+ };
+
+                    var cellsList = (List<Dictionary<string, string>>)tableDict["Cells"];
+
+                    for (int r = 0; r < rows.Count; r++)
+                    {
+                        var cols = rows[r] ?? new List<string>();
+                        for (int c = 0; c < cols.Count; c++)
+                        {
+                            cellsList.Add(new Dictionary<string, string>
+ {
+ { "RowIndex", r.ToString() },
+ { "ColumnIndex", c.ToString() },
+ { "Text", cols[c] ?? string.Empty }
+ });
+                        }
+                    }
+
+                    response.TableData.Add(tableDict);
+                }
+
+                return response;
+            }
+            catch (Exception ex)
+            {
+                context?.Logger.LogError($"Error processing via configured OCR for {documentKey}: {ex.Message}");
+                return new TextractResponse
+                {
+                    JobId = jobId,
+                    JobStatus = "FAILED",
+                    ErrorMessage = ex.Message
+                };
+            }
+            finally
+            {
+                // Clean up temp file
+                try { if (File.Exists(tempFile)) File.Delete(tempFile); } catch { }
+            }
         }
 
         private async Task<TextractResponse> ProcessTextract(string documentKey, ILambdaContext context)
@@ -463,12 +584,12 @@ namespace TextractProcessor
         private Dictionary<string, float> CreateGeometryDictionary(BoundingBox boundingBox)
         {
             return new Dictionary<string, float>
-        {
-   { "Left", GetFloatValue(boundingBox?.Left) },
-      { "Top", GetFloatValue(boundingBox?.Top) },
-    { "Width", GetFloatValue(boundingBox?.Width) },
-    { "Height", GetFloatValue(boundingBox?.Height) }
-        };
+ {
+ { "Left", GetFloatValue(boundingBox?.Left) },
+ { "Top", GetFloatValue(boundingBox?.Top) },
+ { "Width", GetFloatValue(boundingBox?.Width) },
+ { "Height", GetFloatValue(boundingBox?.Height) }
+ };
         }
 
         private Dictionary<string, string> ExtractKeyValuePair(Block keyBlock, List<Block> blocks)
@@ -476,19 +597,19 @@ namespace TextractProcessor
             try
             {
                 var keyText = string.Join(" ", keyBlock.Relationships
-                 .FirstOrDefault(r => r.Type == "CHILD")?
-                    .Ids
-                         .Select(id => blocks.First(b => b.Id == id).Text) ?? Array.Empty<string>());
+                .FirstOrDefault(r => r.Type == "CHILD")?
+                .Ids
+                .Select(id => blocks.First(b => b.Id == id).Text) ?? Array.Empty<string>());
 
                 var valueBlock = blocks.FirstOrDefault(b =>
-             keyBlock.Relationships.Any(r => r.Type == "VALUE" && r.Ids.Contains(b.Id)));
+                keyBlock.Relationships.Any(r => r.Type == "VALUE" && r.Ids.Contains(b.Id)));
 
                 if (valueBlock != null)
                 {
                     var valueText = string.Join(" ", valueBlock.Relationships
-                           .FirstOrDefault(r => r.Type == "CHILD")?
-                        .Ids
-                         .Select(id => blocks.First(b => b.Id == id).Text) ?? Array.Empty<string>());
+                    .FirstOrDefault(r => r.Type == "CHILD")?
+                    .Ids
+                    .Select(id => blocks.First(b => b.Id == id).Text) ?? Array.Empty<string>());
 
                     return new Dictionary<string, string> { { keyText.Trim(), valueText.Trim() } };
                 }
@@ -507,34 +628,34 @@ namespace TextractProcessor
             foreach (var table in tables)
             {
                 var tableCells = blocks.Where(b =>
-         b.BlockType == "CELL" &&
-             b.Relationships?.Any(r => r.Type == "CHILD") == true &&
-          b.Id.StartsWith(table.Id)).ToList();
+                b.BlockType == "CELL" &&
+                b.Relationships?.Any(r => r.Type == "CHILD") == true &&
+                b.Id.StartsWith(table.Id)).ToList();
 
                 var rowCount = tableCells.Max(c => c.RowIndex);
                 var columnCount = tableCells.Max(c => c.ColumnIndex);
 
                 var tableDict = new Dictionary<string, object>
-    {
-     { "TableId", table.Id },
+ {
+ { "TableId", table.Id },
  { "Rows", rowCount },
-             { "Columns", columnCount },
-    { "Cells", new List<Dictionary<string, string>>() }
-            };
+ { "Columns", columnCount },
+ { "Cells", new List<Dictionary<string, string>>() }
+ };
 
                 foreach (var cell in tableCells)
                 {
                     var cellText = string.Join(" ", cell.Relationships
                     .FirstOrDefault(r => r.Type == "CHILD")?
-                 .Ids
-                   .Select(id => blocks.First(b => b.Id == id).Text) ?? Array.Empty<string>());
+                    .Ids
+                    .Select(id => blocks.First(b => b.Id == id).Text) ?? Array.Empty<string>());
 
                     ((List<Dictionary<string, string>>)tableDict["Cells"]).Add(new Dictionary<string, string>
-            {
+ {
  { "RowIndex", cell.RowIndex.ToString() },
-              { "ColumnIndex", cell.ColumnIndex.ToString() },
+ { "ColumnIndex", cell.ColumnIndex.ToString() },
  { "Text", cellText.Trim() }
-        });
+ });
                 }
 
                 tableData.Add(tableDict);
@@ -543,76 +664,26 @@ namespace TextractProcessor
 
         //private void SaveResults(TextractResponse response, string documentKey, ILambdaContext context)
         //{
-        //    try
-        //    {
-        //        context.Logger.LogInformation($"Analysis completed. Found {response.FormData.Count} form fields, {response.TableData.Count} tables, and {response.Pages.Count} pages.");
+        // try
+        // {
+        // context.Logger.LogInformation($"Analysis completed. Found {response.FormData.Count} form fields, {response.TableData.Count} tables, and {response.Pages.Count} pages.");
 
-        //        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-        //        var baseFileName = Path.GetFileNameWithoutExtension(documentKey.Split('/').Last());
+        // var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        // var baseFileName = Path.GetFileNameWithoutExtension(documentKey.Split('/').Last());
 
-        //        var jsonFileName = Path.Combine(OutputDirectory, $"{baseFileName}_{timestamp}.json");
-        //        var jsonContent = JsonSerializer.Serialize(response, new JsonSerializerOptions { WriteIndented = true });
-        //        File.WriteAllText(jsonFileName, jsonContent);
-        //        context.Logger.LogInformation($"Saved JSON results to: {jsonFileName}");
+        // var jsonFileName = Path.Combine(OutputDirectory, $"{baseFileName}_{timestamp}.json");
+        // var jsonContent = JsonSerializer.Serialize(response, new JsonSerializerOptions { WriteIndented = true });
+        // File.WriteAllText(jsonFileName, jsonContent);
+        // context.Logger.LogInformation($"Saved JSON results to: {jsonFileName}");
 
-        //        var textFileName = Path.Combine(OutputDirectory, $"{baseFileName}_{timestamp}.txt");
-        //        SaveEnhancedTextFormat(response, textFileName, documentKey);
-        //        context.Logger.LogInformation($"Saved readable results to: {textFileName}");
-        //    }
-        //    catch (Exception e)
-        //    {
-        //        context.Logger.LogError($"Error saving results for {documentKey}: {e.Message}");
-        //    }
-        //}
-
-        //private void SaveEnhancedTextFormat(TextractResponse response, string filePath, string documentKey)
-        //{
-        //    var sb = new StringBuilder();
-        //    sb.AppendLine("Textract Analysis Results");
-        //    sb.AppendLine("=======================");
-        //    sb.AppendLine($"Document: {documentKey}");
-        //    sb.AppendLine($"Job ID: {response.JobId}");
-        //    sb.AppendLine($"Status: {response.JobStatus}");
-        //    sb.AppendLine();
-
-        //    // Document Statistics
-        //    sb.AppendLine("Document Statistics");
-        //    sb.AppendLine("------------------");
-        //    sb.AppendLine($"Total Pages: {response.Pages.Count}");
-        //    sb.AppendLine($"Total Lines: {response.Pages.Sum(p => p.Lines.Count)}");
-        //    sb.AppendLine($"Total Words: {response.Pages.Sum(p => p.Words.Count)}");
-        //    sb.AppendLine($"Form Fields: {response.FormData.Count}");
-        //    sb.AppendLine();
-
-        //    // Raw Text Content
-        //    sb.AppendLine("Raw Text Content");
-        //    sb.AppendLine("---------------");
-        //    sb.AppendLine(response.RawText);
-        //    sb.AppendLine();
-
-        //    // Form Fields
-        //    if (response.FormData?.Any() == true)
-        //    {
-        //        sb.AppendLine("Form Fields");
-        //        sb.AppendLine("-----------");
-        //        foreach (var field in response.FormData)
-        //        {
-        //            foreach (var kvp in field)
-        //            {
-        //                sb.AppendLine($"{kvp.Key}: {kvp.Value}");
-        //            }
-        //        }
-        //        sb.AppendLine();
-        //    }
-
-        //    if (!string.IsNullOrEmpty(response.ErrorMessage))
-        //    {
-        //        sb.AppendLine("Errors");
-        //        sb.AppendLine("------");
-        //        sb.AppendLine(response.ErrorMessage);
-        //    }
-
-        //    File.WriteAllText(filePath, sb.ToString());
+        // var textFileName = Path.Combine(OutputDirectory, $"{baseFileName}_{timestamp}.txt");
+        // SaveEnhancedTextFormat(response, textFileName, documentKey);
+        // context.Logger.LogInformation($"Saved readable results to: {textFileName}");
+        // }
+        // catch (Exception e)
+        // {
+        // context.Logger.LogError($"Error saving results for {documentKey}: {e.Message}");
+        // }
         //}
         // testing first git checkin
     }

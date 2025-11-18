@@ -7,7 +7,7 @@ namespace TextractProcessor.Configuration
     /// </summary>
     public class OcrConfig
     {
-        public string Engine { get; set; } = "Textract"; // Default: AWS Textract
+        public string Engine { get; set; } = "Aspose"; // Default: AWS Textract
         public string AsposeLicensePath { get; set; } = "Aspose.Total.NET.lic";
         public bool EnableCaching { get; set; } = true;
         public int CacheDurationDays { get; set; } = 30;
@@ -19,7 +19,7 @@ namespace TextractProcessor.Configuration
         {
             return new OcrConfig
             {
-                Engine = Environment.GetEnvironmentVariable("OCR_ENGINE") ?? "Textract",
+                Engine = Environment.GetEnvironmentVariable("OCR_ENGINE") ?? "Aspose",
                 AsposeLicensePath = Environment.GetEnvironmentVariable("ASPOSE_LICENSE_PATH") ?? "Aspose.Total.NET.lic",
                 EnableCaching = bool.Parse(Environment.GetEnvironmentVariable("OCR_ENABLE_CACHING") ?? "true"),
                 CacheDurationDays = int.Parse(Environment.GetEnvironmentVariable("OCR_CACHE_DURATION_DAYS") ?? "30")
