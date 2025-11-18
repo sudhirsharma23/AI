@@ -337,6 +337,19 @@ namespace TextractProcessor
                 // Call configured OCR service (Aspose)
                 var ocrResult = await _ocrService.ExtractTextFromFileAsync(tempFile);
 
+                // If Aspose returned no text or very short text, fall back to Textract
+                var extracted = ocrResult?.RawText ?? string.Empty;
+                var needsFallback = !ocrResult.Success || string.IsNullOrWhiteSpace(extracted) || extracted.Trim().Length <50;
+
+                if (needsFallback)
+                {
+                    LogEvent(context, $"Aspose OCR returned insufficient results for {documentKey}. Falling back to Textract.");
+
+                    // Ensure temp file is cleaned up in finally block; call Textract which reads from S3
+                    var textractResponseFallback = await ProcessTextract(documentKey, context);
+                    return textractResponseFallback;
+                }
+
                 var response = new TextractResponse
                 {
                     JobId = jobId,
@@ -349,12 +362,12 @@ namespace TextractProcessor
                 };
 
                 // Simple conversion of table lists (if present) into placeholder table objects
-                if (ocrResult.TableData != null && ocrResult.TableData.Count > 0)
+                if (ocrResult.TableData != null && ocrResult.TableData.Count >0)
                 {
                     // Treat the entire OcrResult.TableData as a single table where each inner list is a row
                     var rows = ocrResult.TableData;
                     var rowCount = rows.Count;
-                    var colCount = (rows.FirstOrDefault() != null) ? rows.First().Count : 0;
+                    var colCount = (rows.FirstOrDefault() != null) ? rows.First().Count :0;
 
                     var tableDict = new Dictionary<string, object>
  {
@@ -366,10 +379,10 @@ namespace TextractProcessor
 
                     var cellsList = (List<Dictionary<string, string>>)tableDict["Cells"];
 
-                    for (int r = 0; r < rows.Count; r++)
+                    for (int r =0; r < rows.Count; r++)
                     {
                         var cols = rows[r] ?? new List<string>();
-                        for (int c = 0; c < cols.Count; c++)
+                        for (int c =0; c < cols.Count; c++)
                         {
                             cellsList.Add(new Dictionary<string, string>
  {
