@@ -13,6 +13,11 @@ namespace TextractProcessor.Configuration
         public bool EnableCaching { get; set; } = true;
         public int CacheDurationDays { get; set; } = 30;
 
+        // Fallback to Textract when Aspose returns insufficient results
+        public bool EnableTextractFallback { get; set; } = true;
+        // Minimum characters required from Aspose result before considering fallback
+        public int TextractFallbackThresholdChars { get; set; } = 50;
+
         /// <summary>
         /// Load configuration from environment variables with fallback to defaults
         /// </summary>
@@ -22,8 +27,10 @@ namespace TextractProcessor.Configuration
             {
                 Engine = Environment.GetEnvironmentVariable("OCR_ENGINE") ?? "Textract",
                 AsposeLicensePath = Environment.GetEnvironmentVariable("ASPOSE_LICENSE_PATH") ?? "Aspose.Total.NET.lic",
-                EnableCaching = bool.Parse(Environment.GetEnvironmentVariable("OCR_ENABLE_CACHING") ?? "true"),
-                CacheDurationDays = int.Parse(Environment.GetEnvironmentVariable("OCR_CACHE_DURATION_DAYS") ?? "30")
+                EnableCaching = bool.TryParse(Environment.GetEnvironmentVariable("OCR_ENABLE_CACHING"), out var cache) ? cache : true,
+                CacheDurationDays = int.TryParse(Environment.GetEnvironmentVariable("OCR_CACHE_DURATION_DAYS"), out var days) ? days : 30,
+                EnableTextractFallback = bool.TryParse(Environment.GetEnvironmentVariable("OCR_TEXTRACT_FALLBACK_ENABLED"), out var fb) ? fb : true,
+                TextractFallbackThresholdChars = int.TryParse(Environment.GetEnvironmentVariable("OCR_TEXTRACT_FALLBACK_THRESHOLD_CHARS"), out var t) ? t : 50
             };
         }
 
@@ -61,6 +68,11 @@ namespace TextractProcessor.Configuration
             if (CacheDurationDays < 0)
             {
                 throw new InvalidOperationException("OCR_CACHE_DURATION_DAYS must be >=0");
+            }
+
+            if (TextractFallbackThresholdChars < 0)
+            {
+                throw new InvalidOperationException("OCR_TEXTRACT_FALLBACK_THRESHOLD_CHARS must be >=0");
             }
         }
     }

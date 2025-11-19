@@ -341,6 +341,7 @@ namespace ImageTextExtractor.Services.Ocr
             var bytes = System.Text.Encoding.UTF8.GetBytes(input);
             var hash = sha256.ComputeHash(bytes);
             return Convert.ToHexString(hash);
+
         }
     }
 }
