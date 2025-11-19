@@ -147,11 +147,11 @@ namespace AzureTextReader.Services.Ocr
                     Engine = GetEngineName(),
                     ProcessingTime = DateTime.UtcNow - startTime,
                     Metadata = new Dictionary<string, object>
- {
- { "FileType", ext },
- { "FileSize", new FileInfo(filePath).Length },
- { "TextLength", extractedText?.Length ??0 }
- }
+                     {
+                     { "FileType", ext },
+                     { "FileSize", new FileInfo(filePath).Length },
+                     { "TextLength", extractedText?.Length ??0 }
+                     }
                 };
 
                 if (_ocrConfig.EnableCaching && result.Success)

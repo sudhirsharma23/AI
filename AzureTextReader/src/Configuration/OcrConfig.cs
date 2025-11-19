@@ -49,12 +49,13 @@ namespace AzureTextReader.Configuration
             }
 
             // Fall back to configuration file
+            var engineFromEnv = Environment.GetEnvironmentVariable("OCR_ENGINE") ?? "default";
             var builder = new ConfigurationBuilder()
-       .SetBasePath(Directory.GetCurrentDirectory())
-      .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
-                    .AddJsonFile("appsettings.Development.json", optional: true, reloadOnChange: true)
-        .AddUserSecrets<OcrConfig>(optional: true)
-       .AddEnvironmentVariables();
+            .SetBasePath(Directory.GetCurrentDirectory())
+            .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
+            .AddJsonFile($"appsettings.{engineFromEnv}.json", optional: true, reloadOnChange: true)
+            .AddUserSecrets<OcrConfig>(optional: true)
+            .AddEnvironmentVariables();
 
             var configuration = builder.Build();
             var config = configuration.GetSection("Ocr").Get<OcrConfig>() ?? new OcrConfig();

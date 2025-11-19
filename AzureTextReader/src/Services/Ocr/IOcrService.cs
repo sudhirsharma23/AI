@@ -6,10 +6,10 @@ namespace AzureTextReader.Services.Ocr
     public class OcrResult
     {
         public string ImageUrl { get; set; }
-    public string Markdown { get; set; }
+        public string Markdown { get; set; }
         public string PlainText { get; set; }
         public Dictionary<string, object> Metadata { get; set; } = new();
-   public bool Success { get; set; }
+        public bool Success { get; set; }
         public string ErrorMessage { get; set; }
         public string Engine { get; set; }
         public TimeSpan ProcessingTime { get; set; }
@@ -21,17 +21,17 @@ namespace AzureTextReader.Services.Ocr
     public interface IOcrService
     {
         /// <summary>
-  /// Extract text from image URL
-      /// </summary>
+        /// Extract text from image URL
+        /// </summary>
         Task<OcrResult> ExtractTextAsync(string imageUrl, string cacheKey = null);
 
         /// <summary>
- /// Extract text from local file path
+        /// Extract text from local file path
         /// </summary>
         Task<OcrResult> ExtractTextFromFileAsync(string filePath, string cacheKey = null);
 
         /// <summary>
-    /// Extract text from byte array
+        /// Extract text from byte array
         /// </summary>
         Task<OcrResult> ExtractTextFromBytesAsync(byte[] imageBytes, string cacheKey = null);
 

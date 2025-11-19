@@ -36,10 +36,10 @@ namespace AzureTextReader.Configuration
             // Fall back to configuration file
             var builder = new ConfigurationBuilder()
             .SetBasePath(Directory.GetCurrentDirectory())
-        .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
-                .AddJsonFile("appsettings.Development.json", optional: true, reloadOnChange: true)
-.AddUserSecrets<AzureAIConfig>(optional: true) // Loads from user secrets if available
-         .AddEnvironmentVariables(); // Also check env vars again
+            .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
+            .AddJsonFile("appsettings.Development.json", optional: true, reloadOnChange: true)
+            .AddUserSecrets<AzureAIConfig>(optional: true) // Loads from user secrets if available
+            .AddEnvironmentVariables(); // Also check env vars again
 
             var configuration = builder.Build();
             var config = configuration.GetSection("AzureAI").Get<AzureAIConfig>();
@@ -47,13 +47,13 @@ namespace AzureTextReader.Configuration
             if (config == null || string.IsNullOrEmpty(config.Endpoint) || string.IsNullOrEmpty(config.SubscriptionKey))
             {
                 throw new InvalidOperationException(
-"Azure AI configuration not found. Please set either:\n" +
-   "1. Environment variables: AZURE_AI_ENDPOINT and AZURE_AI_KEY\n" +
-   "2. User Secrets (recommended for development):\n" +
-   "   dotnet user-secrets set \"AzureAI:Endpoint\" \"your-endpoint\"\n" +
-     "   dotnet user-secrets set \"AzureAI:SubscriptionKey\" \"your-key\"\n" +
- "3. appsettings.Development.json (not committed to git)"
-    );
+                "Azure AI configuration not found. Please set either:\n" +
+                "1. Environment variables: AZURE_AI_ENDPOINT and AZURE_AI_KEY\n" +
+                "2. User Secrets (recommended for development):\n" +
+                "   dotnet user-secrets set \"AzureAI:Endpoint\" \"your-endpoint\"\n" +
+                "   dotnet user-secrets set \"AzureAI:SubscriptionKey\" \"your-key\"\n" +
+                "3. appsettings.Development.json (not committed to git)"
+                 );
             }
 
             Console.WriteLine("? Loaded Azure AI configuration from appsettings/user secrets");
