@@ -44,7 +44,7 @@ namespace AzureTextReader.Configuration
                     Engine = engine,
                     AsposeLicensePath = Environment.GetEnvironmentVariable("ASPOSE_LICENSE_PATH") ?? "Aspose.Total.NET.lic",
                     EnableCaching = bool.TryParse(Environment.GetEnvironmentVariable("OCR_ENABLE_CACHING"), out var cache) ? cache : true,
-                    CacheDurationDays = int.TryParse(Environment.GetEnvironmentVariable("OCR_CACHE_DURATION_DAYS"), out var days) ? days : 30
+                    CacheDurationDays = int.TryParse(Environment.GetEnvironmentVariable("OCR_CACHE_DURATION_DAYS"), out var days) ? days : 30,
                 };
             }
 
