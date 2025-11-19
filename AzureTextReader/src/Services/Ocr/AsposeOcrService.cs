@@ -1,11 +1,11 @@
 using Aspose.OCR;
 using Aspose.Pdf;
 using Aspose.Pdf.Text;
-using ImageTextExtractor.Configuration;
+using AzureTextReader.Configuration;
 using Microsoft.Extensions.Caching.Memory;
 using System.Text;
 
-namespace ImageTextExtractor.Services.Ocr
+namespace AzureTextReader.Services.Ocr
 {
     /// <summary>
     /// Aspose.Total OCR Service using Aspose.OCR and Aspose.PDF

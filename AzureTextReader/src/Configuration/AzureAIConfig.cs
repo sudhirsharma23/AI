@@ -2,7 +2,7 @@ using Microsoft.Extensions.Configuration;
 using System;
 using System.IO;
 
-namespace ImageTextExtractor.Configuration
+namespace AzureTextReader.Configuration
 {
     /// <summary>
     /// Secure configuration helper that loads Azure AI Services credentials from environment variables or appsettings

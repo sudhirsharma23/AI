@@ -1,4 +1,4 @@
-namespace ImageTextExtractor.Services.Ocr
+namespace AzureTextReader.Services.Ocr
 {
     /// <summary>
     /// Common OCR result structure - abstraction for both Azure and Aspose

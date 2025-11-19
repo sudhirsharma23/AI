@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Caching.Memory;
 using System.Text.Json;
 
-namespace ImageTextExtractor.Services
+namespace AzureTextReader.Services
 {
     /// <summary>
     /// Service for managing and building prompts from template files

@@ -1,8 +1,8 @@
-using ImageTextExtractor.Configuration;
+using AzureTextReader.Configuration;
 using Microsoft.Extensions.Caching.Memory;
 using System.Text.Json;
 
-namespace ImageTextExtractor.Services.Ocr
+namespace AzureTextReader.Services.Ocr
 {
     /// <summary>
     /// Azure Document Analyzer OCR Service

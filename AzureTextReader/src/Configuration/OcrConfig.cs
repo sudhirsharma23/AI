@@ -1,6 +1,6 @@
 using Microsoft.Extensions.Configuration;
 
-namespace ImageTextExtractor.Configuration
+namespace AzureTextReader.Configuration
 {
     /// <summary>
     /// OCR Engine configuration - choose between Azure Document Analyzer or Aspose OCR

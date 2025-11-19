@@ -13,12 +13,12 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Reflection;
 using System.IO;
-using ImageTextExtractor.Configuration;
-using ImageTextExtractor.Services;
-using ImageTextExtractor.Models;
-using ImageTextExtractor.Services.Ocr;  // Add OCR services
+using AzureTextReader.Configuration;
+using AzureTextReader.Services;
+using AzureTextReader.Models;
+using AzureTextReader.Services.Ocr;  // Add OCR services
 
-namespace ImageTextExtractorApp
+namespace AzureTextReaderApp
 {
     internal static class Program
     {
@@ -40,7 +40,7 @@ namespace ImageTextExtractorApp
         // Asynchronous method to process all image URLs
         private static async Task RunAsync(IMemoryCache memoryCache)
         {
-            Console.WriteLine("\n=== ImageTextExtractor - OCR Processing ===\n");
+            Console.WriteLine("\n=== AzureTextReader - OCR Processing ===\n");
 
             // Load OCR configuration first
             Console.WriteLine("Loading OCR configuration...");
@@ -71,7 +71,7 @@ namespace ImageTextExtractorApp
             Console.WriteLine($"\n✓ Using OCR Engine: {ocrService.GetEngineName()}\n");
 
             // Step 1: Extract OCR data from all images using the configured OCR service
-            var allOcrResults = new List<ImageTextExtractor.Services.Ocr.OcrResult>();
+            var allOcrResults = new List<AzureTextReader.Services.Ocr.OcrResult>();
             var combinedMarkdown = new StringBuilder();
 
             foreach (var imageUrl in imageUrls)

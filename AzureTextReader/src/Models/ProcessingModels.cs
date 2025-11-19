@@ -1,4 +1,4 @@
-namespace ImageTextExtractor.Models
+namespace AzureTextReader.Models
 {
     /// <summary>
     /// Azure OpenAI Model Configuration with predefined settings

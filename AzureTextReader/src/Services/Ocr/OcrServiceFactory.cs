@@ -1,7 +1,7 @@
-using ImageTextExtractor.Configuration;
+using AzureTextReader.Configuration;
 using Microsoft.Extensions.Caching.Memory;
 
-namespace ImageTextExtractor.Services.Ocr
+namespace AzureTextReader.Services.Ocr
 {
     /// <summary>
     /// Factory to create the appropriate OCR service based on configuration
