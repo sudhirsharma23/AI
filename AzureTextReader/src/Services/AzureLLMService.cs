@@ -1,5 +1,7 @@
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Configuration;
 using System.Collections;
+using System.Linq;
 using System.Net;
 using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
@@ -9,13 +11,12 @@ using System.Text.Json.Nodes;
 using System.Reflection;
 using System.IO;
 using AzureTextReader.Configuration;
-using AzureTextReader.Services;
 using AzureTextReader.Models;
-using AzureTextReader.Services.Ocr;  // Add OCR services
+using AzureTextReader.Services.Ocr;
 
-namespace AzureTextReaderApp
+namespace AzureTextReader.Services
 {
-    internal static class Program1
+    internal static class AzureLLMService
     {
         private const string OutputDirectory = "OutputFiles";
 
@@ -33,10 +34,10 @@ namespace AzureTextReaderApp
             await RunAsync(memoryCache);
         }
 
-        // Asynchronous method to process all image URLs
+        // Asynchronous method to process all image URLs (now reads processed OCR JSON files)
         private static async Task RunAsync(IMemoryCache memoryCache)
         {
-            Console.WriteLine("\n=== AzureTextReader - OCR Processing ===\n");
+            Console.WriteLine("\n=== AzureTextReader - OCR Processing (from processed files) ===\n");
 
             // Load OCR configuration first
             Console.WriteLine("Loading OCR configuration...");
@@ -52,51 +53,92 @@ namespace AzureTextReaderApp
                 azureConfig.Validate();
             }
 
-            var imageUrls = new[] {
-           "https://github.com/sudhirsharma23/azure-ai-foundry-image-text-extractor/blob/main/src/images/2025000065659-1.tif?raw=true",
-         "https://github.com/sudhirsharma23/azure-ai-foundry-image-text-extractor/blob/main/src/images/2025000065659.tif?raw=true"
-         };
+            // Determine processed folder (use default from FileMonitorOptions if available)
+            var processedFolder = "processed"; // default
+            try
+            {
+                // If configuration file contains FileMonitor section, try to read processed folder
+                var builder = new ConfigurationBuilder()
+                    .SetBasePath(Directory.GetCurrentDirectory())
+                    .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
+                    .AddEnvironmentVariables();
+                var configuration = builder.Build();
+                var fmSection = configuration.GetSection("FileMonitor");
+                var pf = fmSection?["ProcessedFolder"];
+                if (!string.IsNullOrWhiteSpace(pf)) processedFolder = pf;
+            }
+            catch { /* ignore and use default */ }
 
-            // Create HTTP client for OCR services
-            using var httpClient = new HttpClient();
+            Console.WriteLine($"Looking for OCR output JSON files in folder: {processedFolder}");
 
-            // Create OCR service factory and get the configured service
-            var ocrFactory = new OcrServiceFactory(ocrConfig, azureConfig, memoryCache, httpClient);
-            var ocrService = ocrFactory.CreateOcrService();
-
-            Console.WriteLine($"\n? Using OCR Engine: {ocrService.GetEngineName()}\n");
-
-            // Step 1: Extract OCR data from all images using the configured OCR service
-            var allOcrResults = new List<AzureTextReader.Services.Ocr.OcrResult>();
+            // Step 1: Read all processed JSON files and build combined markdown
+            var allOcrResults = new List<Ocr.OcrResult>();
             var combinedMarkdown = new StringBuilder();
 
-            foreach (var imageUrl in imageUrls)
+            if (Directory.Exists(processedFolder))
             {
-                Console.WriteLine($"\n=== Processing image: {imageUrl} ===");
+                var jsonFiles = Directory.GetFiles(processedFolder, "*.json").OrderBy(f => f).ToArray();
 
-                var result = await ocrService.ExtractTextAsync(imageUrl);
-
-                if (result.Success)
+                if (jsonFiles.Length == 0)
                 {
-                    allOcrResults.Add(result);
-                    combinedMarkdown.AppendLine($"### Document: {Path.GetFileName(imageUrl)}");
-                    combinedMarkdown.AppendLine($"**OCR Engine**: {result.Engine}");
-                    combinedMarkdown.AppendLine($"**Processing Time**: {result.ProcessingTime.TotalSeconds:F2}s");
-                    combinedMarkdown.AppendLine();
-                    combinedMarkdown.AppendLine(result.Markdown);
-                    combinedMarkdown.AppendLine("\n---\n");
+                    Console.WriteLine("No processed OCR JSON files found. Exiting.");
+                    return;
+                }
 
-                    Console.WriteLine($"? Success! Extracted {result.PlainText?.Length ?? 0} characters in {result.ProcessingTime.TotalSeconds:F2}s");
-                }
-                else
+                foreach (var jf in jsonFiles)
                 {
-                    Console.WriteLine($"? Failed: {result.ErrorMessage}");
+                    Console.WriteLine($"\n=== Reading processed file: {jf} ===");
+                    try
+                    {
+                        var txt = File.ReadAllText(jf, Encoding.UTF8);
+                        var doc = JsonSerializer.Deserialize<JsonElement>(txt);
+
+                        string imageUrl = doc.TryGetProperty("ImageUrl", out var iu) ? iu.GetString() ?? Path.GetFileName(jf) : Path.GetFileName(jf);
+                        string engine = doc.TryGetProperty("Engine", out var en) ? en.GetString() ?? "unknown" : "unknown";
+                        string markdown = doc.TryGetProperty("Markdown", out var md) ? md.GetString() ?? string.Empty : string.Empty;
+                        string plain = doc.TryGetProperty("PlainText", out var pt) ? pt.GetString() ?? string.Empty : string.Empty;
+
+                        var ocrResult = new Ocr.OcrResult
+                        {
+                            ImageUrl = imageUrl,
+                            Markdown = string.IsNullOrWhiteSpace(markdown) ? string.IsNullOrWhiteSpace(plain) ? string.Empty : ""  : markdown
+                        };
+
+                        // Prefer Markdown if present, otherwise construct a simple markdown from plain text
+                        if (string.IsNullOrWhiteSpace(ocrResult.Markdown) && !string.IsNullOrWhiteSpace(plain))
+                        {
+                            ocrResult.Markdown = "# Extracted Text\n\n" + plain;
+                        }
+
+                        allOcrResults.Add(new Ocr.OcrResult
+                        {
+                            ImageUrl = imageUrl,
+                            Markdown = ocrResult.Markdown
+                        });
+
+                        combinedMarkdown.AppendLine($"### Document: {Path.GetFileName(imageUrl)}");
+                        combinedMarkdown.AppendLine($"**OCR Engine**: {engine}");
+                        combinedMarkdown.AppendLine();
+                        combinedMarkdown.AppendLine(ocrResult.Markdown ?? string.Empty);
+                        combinedMarkdown.AppendLine("\n---\n");
+
+                        Console.WriteLine($"Loaded processed OCR content from: {jf}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Failed to read/parse {jf}: {ex.Message}");
+                    }
                 }
+            }
+            else
+            {
+                Console.WriteLine($"Processed folder does not exist: {processedFolder}. Exiting.");
+                return;
             }
 
             if (allOcrResults.Count == 0)
             {
-                Console.WriteLine("\n? No OCR data extracted. Exiting.");
+                Console.WriteLine("\n? No OCR data extracted from processed files. Exiting.");
                 return;
             }
 
@@ -127,11 +169,11 @@ namespace AzureTextReaderApp
             Console.WriteLine("\n=== Processing with Azure OpenAI ChatCompletion ===");
 
             // Initialize the LocalAzureOpenAIClient with secure credentials (use local wrapper types)
-            var credential = new AzureTextReader.Services.LocalApiKeyCredential(config.SubscriptionKey);
-            var azureClient = new AzureTextReader.Services.LocalAzureOpenAIClient(new Uri(config.Endpoint), credential);
+            var credential = new LocalApiKeyCredential(config.SubscriptionKey);
+            var azureClient = new LocalAzureOpenAIClient(new Uri(config.Endpoint), credential);
 
             // Initialize the LocalChatClient with the specified deployment name
-            AzureTextReader.Services.LocalChatClient chatClient = azureClient.GetChatClient(ModelConfig.DeploymentName);
+            LocalChatClient chatClient = azureClient.GetChatClient(ModelConfig.DeploymentName);
 
             // Process with BOTH versions for comparison
             Console.WriteLine("\n--- Version 1: Schema-Based Extraction ---");
@@ -142,7 +184,7 @@ namespace AzureTextReaderApp
         }
 
         // VERSION 1: Schema-based extraction (existing logic)
-        private static async Task ProcessVersion1(IMemoryCache memoryCache, AzureTextReader.Services.LocalChatClient chatClient, string combinedMarkdown, string timestamp)
+        private static async Task ProcessVersion1(IMemoryCache memoryCache, LocalChatClient chatClient, string combinedMarkdown, string timestamp)
         {
             try
             {
@@ -192,7 +234,7 @@ namespace AzureTextReaderApp
                 {
                     Console.WriteLine($"Cache miss - Calling ChatClient.CompleteChat for V1...");
                     // Create the chat completion request (returns our minimal wrapper)
-                    AzureTextReader.Services.LocalChatCompletion completion = chatClient.CompleteChat(messages, options);
+                    LocalChatCompletion completion = chatClient.CompleteChat(messages, options);
 
                     // Serialize the response to JSON for consistent caching / logging
                     var completionJson = JsonSerializer.Serialize(completion, new JsonSerializerOptions() { WriteIndented = true });
@@ -219,7 +261,7 @@ namespace AzureTextReaderApp
         }
 
         // VERSION 2: Dynamic extraction (no schema, purely from OCR)
-        private static async Task ProcessVersion2(IMemoryCache memoryCache, AzureTextReader.Services.LocalChatClient chatClient, string combinedMarkdown, string timestamp)
+        private static async Task ProcessVersion2(IMemoryCache memoryCache, LocalChatClient chatClient, string combinedMarkdown, string timestamp)
         {
             try
             {
@@ -273,7 +315,7 @@ namespace AzureTextReaderApp
                 {
                     Console.WriteLine($"Cache miss - Calling ChatClient.CompleteChat for V2...");
                     // Create the chat completion request (returns our minimal wrapper)
-                    AzureTextReader.Services.LocalChatCompletion completion = chatClient.CompleteChat(messages, options);
+                    LocalChatCompletion completion = chatClient.CompleteChat(messages, options);
 
                     // Serialize the response to JSON for consistent caching / logging
                     var completionJson = JsonSerializer.Serialize(completion, new JsonSerializerOptions() { WriteIndented = true });
@@ -668,7 +710,7 @@ namespace AzureTextReaderApp
         }
 
         // Helper: compute stable cache key from messages + options + identifier
-        private static string ComputeCacheKey(IList<object> messages, AzureTextReader.Services.LocalChatCompletionOptions options, string identifier)
+        private static string ComputeCacheKey(IList<object> messages, LocalChatCompletionOptions options, string identifier)
         {
             var sb = new StringBuilder();
             sb.Append($"id:{identifier};");
@@ -704,7 +746,7 @@ namespace AzureTextReaderApp
             return Convert.ToHexString(hash);
         }
 
-
+        
         // Simple cache key for OCR results
         private static string ComputeSimpleCacheKey(string input)
         {
@@ -764,9 +806,9 @@ namespace AzureTextReaderApp
         }
 
         // Create chat completion options
-        private static AzureTextReader.Services.LocalChatCompletionOptions CreateChatOptions()
+        private static LocalChatCompletionOptions CreateChatOptions()
         {
-            return new AzureTextReader.Services.LocalChatCompletionOptions
+            return new LocalChatCompletionOptions
             {
                 Temperature = ModelConfig.Temperature,
                 MaxOutputTokenCount = ModelConfig.MaxTokens,
@@ -787,7 +829,7 @@ namespace AzureTextReaderApp
                 if (text[i] == '{' || text[i] == '[')
                 {
                     char open = text[i];
-                    char close = (open == '{') ? '}' : ']';
+                    char close = open == '{' ? '}' : ']';
                     int depth = 0;
                     int start = i;
                     for (int j = i; j < text.Length; j++)
