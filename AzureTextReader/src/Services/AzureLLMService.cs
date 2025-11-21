@@ -23,6 +23,13 @@ namespace AzureTextReader.Services
         // Configure which model to use - easy to switch!
         private static readonly AzureOpenAIModelConfig ModelConfig = AzureOpenAIModelConfig.GPT4oMini;
 
+        // Public entry point so the background worker can invoke LLM processing after OCR
+        public static async Task InvokeAfterOcrAsync(IMemoryCache memoryCache)
+        {
+            if (memoryCache == null) throw new ArgumentNullException(nameof(memoryCache));
+            await RunAsync(memoryCache);
+        }
+
         // Renamed to avoid duplicate entry point in the project
         private static async Task RunExampleAsync()
         {
@@ -101,7 +108,7 @@ namespace AzureTextReader.Services
                         var ocrResult = new Ocr.OcrResult
                         {
                             ImageUrl = imageUrl,
-                            Markdown = string.IsNullOrWhiteSpace(markdown) ? string.IsNullOrWhiteSpace(plain) ? string.Empty : ""  : markdown
+                            Markdown = string.IsNullOrWhiteSpace(markdown) ? string.IsNullOrWhiteSpace(plain) ? string.Empty : "" : markdown
                         };
 
                         // Prefer Markdown if present, otherwise construct a simple markdown from plain text
@@ -415,7 +422,7 @@ namespace AzureTextReader.Services
 
                 // Count total fields extracted
                 int totalFields = CountJsonFields(extractedData);
-                summary.AppendLine($"## Statistics");
+                summary.AppendLine("## Statistics");
                 summary.AppendLine($"- Total fields extracted: {totalFields}");
                 summary.AppendLine();
 
@@ -746,7 +753,7 @@ namespace AzureTextReader.Services
             return Convert.ToHexString(hash);
         }
 
-        
+
         // Simple cache key for OCR results
         private static string ComputeSimpleCacheKey(string input)
         {

@@ -7,6 +7,8 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Azure.Messaging.ServiceBus;
+using Microsoft.Extensions.Caching.Memory;
+using AzureTextReader.Services; // for AzureLLMService
 
 namespace AzureTextReader.Services.Ocr
 {
@@ -45,16 +47,19 @@ namespace AzureTextReader.Services.Ocr
         private readonly CancellationTokenSource _internalCts = new();
         private readonly ServiceBusClient? _serviceBusClient;
         private readonly string? _serviceBusQueueName;
+        private readonly IMemoryCache _memoryCache; // injected cache
 
         public FileMonitorBackgroundService(
         ILogger<FileMonitorBackgroundService> logger,
         IOcrService ocrService,
         IOptions<FileMonitorOptions> options,
-        IServiceProvider sp)
+        IServiceProvider sp,
+        IMemoryCache memoryCache)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _ocrService = ocrService ?? throw new ArgumentNullException(nameof(ocrService));
             _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
+            _memoryCache = memoryCache ?? throw new ArgumentNullException(nameof(memoryCache));
 
             // ServiceBus client optional
             try
@@ -396,14 +401,14 @@ namespace AzureTextReader.Services.Ocr
                         {
                             // write JSON output next to file in processed folder
                             var cleaned = new Dictionary<string, object>
- {
- { "ImageUrl", ocrResult.ImageUrl },
- { "Engine", ocrResult.Engine },
- { "ProcessingTimeSeconds", ocrResult.ProcessingTime.TotalSeconds },
- { "PlainText", ocrResult.PlainText },
- { "Markdown", ocrResult.Markdown },
- { "Metadata", ocrResult.Metadata }
- };
+                            {
+                                { "ImageUrl", ocrResult.ImageUrl },
+                                { "Engine", ocrResult.Engine },
+                                { "ProcessingTimeSeconds", ocrResult.ProcessingTime.TotalSeconds },
+                                { "PlainText", ocrResult.PlainText },
+                                { "Markdown", ocrResult.Markdown },
+                                { "Metadata", ocrResult.Metadata }
+                            };
 
                             var json = JsonSerializer.Serialize(cleaned, new JsonSerializerOptions { WriteIndented = true });
 
@@ -419,6 +424,17 @@ namespace AzureTextReader.Services.Ocr
                             MoveFileSafe(processingPath, _options.ProcessedFolder);
 
                             _logger.LogInformation("Successfully processed {File}. Output: {Out}", processingPath, outPath);
+
+                            // Invoke LLM processing after successful OCR
+                            try
+                            {
+                                await AzureLLMService.InvokeAfterOcrAsync(_memoryCache);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogWarning(ex, "AzureLLMService invocation failed after OCR for file {File}", processingPath);
+                            }
+
                             return;
                         }
                         else
