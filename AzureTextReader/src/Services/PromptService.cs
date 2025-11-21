@@ -195,7 +195,7 @@ namespace AzureTextReader.Services
     /// </summary>
     public class PromptRequest
     {
-        public string TemplateType { get; set; } = "deed_extraction";
+        public string TemplateType { get; set; } = "document_extraction";
         public string Version { get; set; } = "v1";
         public bool IncludeExamples { get; set; } = true;
         public string ExampleSet { get; set; } = "default";

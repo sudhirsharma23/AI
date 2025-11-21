@@ -161,7 +161,7 @@ namespace AzureTextReaderApp
                 // Build complete prompt using PromptService
                 var builtPrompt = await promptService.BuildCompletePromptAsync(new PromptRequest
                 {
-                    TemplateType = "deed_extraction",
+                    TemplateType = "document_extraction",
                     Version = "v1",
                     IncludeExamples = true,
                     ExampleSet = "default",
@@ -234,7 +234,7 @@ namespace AzureTextReaderApp
                 // Build V2 prompt - NO schema, NO examples, NO rules - pure dynamic extraction
                 var builtPrompt = await promptService.BuildCompletePromptAsync(new PromptRequest
                 {
-                    TemplateType = "deed_extraction",
+                    TemplateType = "document_extraction",
                     Version = "v2",
                     IncludeExamples = false,  // No examples for dynamic extraction
                     IncludeRules = false,     // No rules, let AI figure it out
