@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Caching.Memory;
@@ -47,7 +48,29 @@ namespace AzureTextReader.Services
 
             if (!File.Exists(promptPath))
             {
-                throw new FileNotFoundException($"Prompt template not found: {promptPath}");
+                // Fallback: try to find any prompt file matching the requested version in SystemPrompts
+                var systemDir = Path.Combine(_promptsDirectory, "SystemPrompts");
+                if (Directory.Exists(systemDir))
+                {
+                    // try files that end with _{version}.txt
+                    var candidates = Directory.GetFiles(systemDir, $"*_{version}.txt");
+                    if (candidates.Length > 0)
+                    {
+                        promptPath = candidates[0];
+                    }
+                    else
+                    {
+                        // try to find file that contains the templateName
+                        var containing = Directory.GetFiles(systemDir, "*.txt")
+                            .FirstOrDefault(f => Path.GetFileName(f).IndexOf(templateName ?? string.Empty, StringComparison.OrdinalIgnoreCase) >= 0);
+                        if (!string.IsNullOrEmpty(containing)) promptPath = containing;
+                    }
+                }
+
+                if (!File.Exists(promptPath))
+                {
+                    throw new FileNotFoundException($"Prompt template not found: {promptPath}");
+                }
             }
 
             var prompt = await File.ReadAllTextAsync(promptPath);

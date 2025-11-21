@@ -23,6 +23,72 @@ namespace AzureTextReader.Services
         // Configure which model to use - easy to switch!
         private static readonly AzureOpenAIModelConfig ModelConfig = AzureOpenAIModelConfig.GPT4oMini;
 
+        // Locate the invoice schema path using appsettings.json (Schema:InvoiceSchemaPath) or environment, fallback to common locations
+        private static string LocateSchemaPath()
+        {
+            var tried = new List<string>();
+            try
+            {
+                var builder = new ConfigurationBuilder()
+                    .SetBasePath(Directory.GetCurrentDirectory())
+                    .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
+                    .AddEnvironmentVariables();
+                var configuration = builder.Build();
+
+                // Prefer explicit configuration key
+                var configured = configuration["Schema:InvoiceSchemaPath"] ?? configuration["InvoiceSchemaPath"] ?? Environment.GetEnvironmentVariable("INVOICE_SCHEMA_PATH");
+                if (!string.IsNullOrWhiteSpace(configured))
+                {
+                    // If absolute and exists, return
+                    if (Path.IsPathRooted(configured))
+                    {
+                        tried.Add(Path.GetFullPath(configured));
+                        if (File.Exists(configured)) return configured;
+                    }
+                    else
+                    {
+                        // Try several bases for relative configured path
+                        var relCandidates = new[] {
+                            Path.Combine(Directory.GetCurrentDirectory(), configured),
+                            Path.Combine(AppContext.BaseDirectory ?? string.Empty, configured),
+                            Path.Combine(AppContext.BaseDirectory ?? string.Empty, "..", "..", "..", configured),
+                            Path.Combine(Directory.GetCurrentDirectory(), "..", "..", configured),
+                            Path.Combine(Directory.GetCurrentDirectory(), "src", configured)
+                        };
+
+                        foreach (var p in relCandidates)
+                        {
+                            var full = Path.GetFullPath(p);
+                            tried.Add(full);
+                            if (File.Exists(full)) return full;
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // ignore config errors but record attempted base
+            }
+
+            // fallback locations to search
+            var candidatePaths = new[] {
+                Path.Combine(Directory.GetCurrentDirectory(), "src", "invoice_schema.json"),
+                Path.Combine(Directory.GetCurrentDirectory(), "invoice_schema.json"),
+                Path.Combine(AppContext.BaseDirectory ?? string.Empty, "invoice_schema.json"),
+                Path.Combine(AppContext.BaseDirectory ?? string.Empty, "..", "..", "..", "src", "invoice_schema.json")
+            };
+
+            foreach (var p in candidatePaths)
+            {
+                var full = Path.GetFullPath(p);
+                tried.Add(full);
+                if (File.Exists(full)) return full;
+            }
+
+            // nothing found - throw with helpful message
+            throw new FileNotFoundException($"invoice_schema.json not found. Searched paths: {string.Join(";", tried.Distinct())}");
+        }
+
         // Public entry point so the background worker can invoke LLM processing after OCR
         public static async Task InvokeAfterOcrAsync(IMemoryCache memoryCache)
         {
@@ -195,8 +261,9 @@ namespace AzureTextReader.Services
         {
             try
             {
-                // Load JSON schema
-                string schemaText = File.ReadAllText("E:\\Sudhir\\Prj\\files\\zip\\src\\invoice_schema.json");
+                // Load JSON schema (locate relative to current working directory or app base directory)
+                var schemaPath = LocateSchemaPath();
+                string schemaText = File.ReadAllText(schemaPath);
                 JsonNode jsonSchema = JsonNode.Parse(schemaText);
 
                 // Initialize PromptService
@@ -551,8 +618,8 @@ namespace AzureTextReader.Services
                 Console.WriteLine("\n=== Analyzing Schema Extensions ===");
 
                 // Load base schema
-                string schemaText = File.ReadAllText("E:\\Sudhir\\Prj\\files\\zip\\src\\invoice_schema.json");
-                var baseSchema = JsonNode.Parse(schemaText);
+                var schemaPath = LocateSchemaPath();
+                var baseSchema = JsonNode.Parse(File.ReadAllText(schemaPath));
                 var extractedData = JsonNode.Parse(extractedJson);
 
                 var extensions = new List<string>();
