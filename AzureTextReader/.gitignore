@@ -448,3 +448,10 @@ bedrock_responses/
 !**/invoice_schema*.json
 !**/schema*.json
 !**/*_schema.json
+
+# Unignore prompt files so SystemPrompts text templates are tracked and copied
+# These lines must come after any rules that ignore '*.txt'
+!src/Prompts/
+!src/Prompts/**
+!src/Prompts/**/**
+!src/Prompts/SystemPrompts/*.txt
