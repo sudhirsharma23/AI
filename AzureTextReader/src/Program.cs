@@ -17,6 +17,7 @@ using AzureTextReader.Configuration;
 using AzureTextReader.Services;
 using AzureTextReader.Models;
 using AzureTextReader.Services.Ocr;  // Add OCR services
+using Microsoft.Extensions.Configuration;
 
 namespace AzureTextReaderApp
 {
@@ -151,7 +152,7 @@ namespace AzureTextReaderApp
             try
             {
                 // Load JSON schema
-                string schemaText = File.ReadAllText("E:\\Sudhir\\Prj\\files\\zip\\src\\invoice_schema.json");
+                string schemaText = File.ReadAllText("E:\\Sudhir\\Code\\AzureTextReader\\src\\invoice_schema.json");
                 JsonNode jsonSchema = JsonNode.Parse(schemaText);
 
                 // Initialize PromptService
@@ -227,73 +228,193 @@ namespace AzureTextReaderApp
         {
             try
             {
-                // Initialize PromptService for V2
-                Console.WriteLine("Building V2 prompt from templates (dynamic, no schema)...");
+                Console.WriteLine("Building V2 prompt from templates (dynamic, no schema) with chunked processing...");
                 var promptService = new PromptService(memoryCache);
 
-                // Build V2 prompt - NO schema, NO examples, NO rules - pure dynamic extraction
-                var builtPrompt = await promptService.BuildCompletePromptAsync(new PromptRequest
-                {
-                    TemplateType = "document_extraction",
-                    Version = "v2",
-                    IncludeExamples = false,  // No examples for dynamic extraction
-                    IncludeRules = false,     // No rules, let AI figure it out
-                    RuleNames = new List<string>(),
-                    SchemaJson = "",     // NO SCHEMA!
-                    SourceData = combinedMarkdown,
-                    UserMessageTemplate = "Analyze the documents below and extract ALL relevant information dynamically. Focus on:\n" +
-                                         "- Buyer information (names, addresses, percentages, details)\n" +
-                                         "- Seller information (old owners)\n" +
-                                         "- Property details (address, legal description, parcel info)\n" +
-                                         "- Land records information\n" +
-                                         "- Transaction details\n" +
-                                         "- PCOR information (if present)\n\n" +
-                                         "Return a comprehensive JSON with all findings.\n\n" +
-                                         $"DOCUMENTS:\n\n{combinedMarkdown}"
-                });
+                // Chunk the combined markdown to avoid context/token limits
+                const int chunkSize = 6000; // characters per chunk (tunable)
+                var chunks = SplitTextIntoChunks(combinedMarkdown, chunkSize);
 
-                Console.WriteLine($"V2 Prompt built successfully (System: {builtPrompt.SystemMessage.Length} chars, User: {builtPrompt.UserMessage.Length} chars)");
-
-                // Create messages using built prompt
-                var messages = new List<OpenAI.Chat.ChatMessage>
-                {
-                    new SystemChatMessage(builtPrompt.SystemMessage),
-                    new UserChatMessage(builtPrompt.UserMessage)
-                };
-
-                // Use configured options from ModelConfig
                 var options = CreateChatOptions();
+                var chunkJsonNodes = new List<JsonNode>();
 
-                // Compute a cache key for V2
-                var cacheKey = ComputeCacheKey(messages, options, "v2_dynamic_documents");
-
-                // Try to pull cached response
-                if (memoryCache.TryGetValue(cacheKey, out var cachedObj) && cachedObj is string cachedJson)
+                for (int i = 0; i < chunks.Count; i++)
                 {
-                    Console.WriteLine($"Cache hit for V2 ChatCompletion - using cached response.");
-                    await SaveFinalCleanedJson(cachedJson, timestamp, "_v2_dynamic");
-                }
-                else
-                {
-                    Console.WriteLine($"Cache miss - Calling ChatClient.CompleteChat for V2...");
-                    // Create the chat completion request
-                    ChatCompletion completion = chatClient.CompleteChat(messages, options);
+                    var chunk = chunks[i];
+                    Console.WriteLine($"Processing chunk {i + 1}/{chunks.Count} (approx {chunk.Length} chars)");
 
-                    // Serialize the response to JSON for consistent caching / logging
-                    var completionJson = JsonSerializer.Serialize(completion, new JsonSerializerOptions() { WriteIndented = true });
-
-                    // Cache the serialized completion
-                    var cacheEntryOptions = new MemoryCacheEntryOptions
+                    // Build V2 prompt for this chunk
+                    var builtPrompt = await promptService.BuildCompletePromptAsync(new PromptRequest
                     {
-                        AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(7),
-                        SlidingExpiration = TimeSpan.FromHours(24)
+                        TemplateType = "document_extraction",
+                        Version = "v2",
+                        IncludeExamples = false,
+                        IncludeRules = false,
+                        RuleNames = new List<string>(),
+                        SchemaJson = "",
+                        SourceData = chunk,
+                        UserMessageTemplate = "Analyze the documents below and extract ALL relevant information dynamically. Return a comprehensive JSON with all findings.\n\nDOCUMENTS:\n\n" + chunk
+                    });
+
+                    var messages = new List<OpenAI.Chat.ChatMessage>
+                    {
+                        new SystemChatMessage(builtPrompt.SystemMessage),
+                        new UserChatMessage(builtPrompt.UserMessage)
                     };
 
-                    memoryCache.Set(cacheKey, completionJson, cacheEntryOptions);
-                    Console.WriteLine($"Cached V2 ChatCompletion result");
+                    // Compute a per-chunk cache key
+                    var cacheKey = ComputeCacheKey(messages, options, $"v2_chunk_{i}");
 
-                    // Extract and save the final cleaned JSON
-                    await SaveFinalCleanedJson(completionJson, timestamp, "_v2_dynamic");
+                    string completionJson = null;
+
+                    if (memoryCache.TryGetValue(cacheKey, out var cachedObj) && cachedObj is string cachedJson)
+                    {
+                        Console.WriteLine($"Cache hit for V2 chunk {i + 1}");
+                        completionJson = cachedJson;
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Calling ChatClient.CompleteChat for chunk {i + 1}...");
+                        var completion = chatClient.CompleteChat(messages, options);
+                        completionJson = JsonSerializer.Serialize(completion, new JsonSerializerOptions { WriteIndented = true });
+
+                        var cacheEntryOptions = new MemoryCacheEntryOptions
+                        {
+                            AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(7),
+                            SlidingExpiration = TimeSpan.FromHours(24)
+                        };
+                        memoryCache.Set(cacheKey, completionJson, cacheEntryOptions);
+                    }
+
+                    // Extract model text from completion
+                    var completionElement = JsonSerializer.Deserialize<JsonElement>(completionJson);
+                    var modelText = ExtractModelTextFromJson(completionElement);
+
+                    if (string.IsNullOrWhiteSpace(modelText))
+                    {
+                        Console.WriteLine($"No model text found for chunk {i + 1}, skipping.");
+                        continue;
+                    }
+
+                    var jsonObjects = ExtractJsonObjects(modelText);
+                    if (jsonObjects.Count == 0)
+                    {
+                        Console.WriteLine($"No JSON object found in model output for chunk {i + 1}.");
+                        continue;
+                    }
+
+                    // Clean and parse first valid JSON from this chunk
+                    var cleaned = CleanAndReturnJson(jsonObjects);
+                    if (string.IsNullOrEmpty(cleaned))
+                    {
+                        Console.WriteLine($"No valid JSON after cleaning for chunk {i + 1}.");
+                        continue;
+                    }
+
+                    try
+                    {
+                        var node = JsonNode.Parse(cleaned);
+                        if (node != null) chunkJsonNodes.Add(node);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Failed parsing cleaned JSON for chunk {i + 1}: {ex.Message}");
+                    }
+                }
+
+                if (chunkJsonNodes.Count == 0)
+                {
+                    Console.WriteLine("No JSON extracted from any chunk. Exiting V2 processing.");
+                    return;
+                }
+
+                // Merge all chunk JSON objects into one consolidated JsonNode
+                JsonNode merged = chunkJsonNodes[0].DeepClone();
+                for (int i = 1; i < chunkJsonNodes.Count; i++)
+                {
+                    merged = MergeJsonNodes(merged, chunkJsonNodes[i]);
+                }
+
+                // Clean merged node
+                CleanJsonNode(merged);
+
+                var mergedPretty = JsonSerializer.Serialize(merged, new JsonSerializerOptions { WriteIndented = true });
+                var finalOutputPath = Path.Combine(OutputDirectory, $"final_output_{timestamp}_v2_dynamic.json");
+                File.WriteAllText(finalOutputPath, mergedPretty, Encoding.UTF8);
+                Console.WriteLine($"Saved merged V2 final JSON to: {finalOutputPath}");
+
+                // Create summary report and field list
+                // Final normalization pass: ask the model to reconcile/normalize the merged JSON
+                try
+                {
+                    Console.WriteLine("Running final normalization pass to reconcile merged JSON...");
+
+                    // Build normalization prompt
+                    var normSystem = "You are a JSON normalization assistant. Given a merged JSON produced from multiple document chunks, reconcile duplicate fields, normalize date/number formats, merge arrays, and ensure output is a single clean JSON object following snake_case naming. Return ONLY the final JSON object with no explanation.";
+                    var normUser = "Here is the merged JSON. Normalize and reconcile it, returning a single JSON object only:\n\n" + mergedPretty;
+
+                    var normMessages = new List<OpenAI.Chat.ChatMessage>
+                    {
+                        new SystemChatMessage(normSystem),
+                        new UserChatMessage(normUser)
+                    };
+
+                    var normOptions = CreateChatOptions();
+                    // Lower temperature for deterministic normalization
+                    // Set a low temperature for deterministic normalization (use the lower of configured and 0.2)
+                    var currentTemp = normOptions.Temperature ?? ModelConfig.Temperature;
+                    var maxNormTemp = GetNormalizationMaxTemperature();
+                    normOptions.Temperature = MathF.Min(currentTemp, maxNormTemp);
+
+                    var normCacheKey = ComputeCacheKey(normMessages, normOptions, "v2_reconcile_merged_json");
+
+                    string normCompletionJson = null;
+                    if (memoryCache.TryGetValue(normCacheKey, out var normCached) && normCached is string nc)
+                    {
+                        Console.WriteLine("Cache hit for normalization pass.");
+                        normCompletionJson = nc;
+                    }
+                    else
+                    {
+                        var normCompletion = chatClient.CompleteChat(normMessages, normOptions);
+                        normCompletionJson = JsonSerializer.Serialize(normCompletion, new JsonSerializerOptions { WriteIndented = true });
+                        var cacheEntryOptions = new MemoryCacheEntryOptions
+                        {
+                            AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(7),
+                            SlidingExpiration = TimeSpan.FromHours(24)
+                        };
+                        memoryCache.Set(normCacheKey, normCompletionJson, cacheEntryOptions);
+                    }
+
+                    var normElement = JsonSerializer.Deserialize<JsonElement>(normCompletionJson);
+                    var normModelText = ExtractModelTextFromJson(normElement);
+                    var normJsonObjects = ExtractJsonObjects(normModelText);
+                    string normalizedPretty = string.Empty;
+                    if (normJsonObjects.Count > 0)
+                    {
+                        normalizedPretty = CleanAndReturnJson(normJsonObjects);
+                    }
+
+                    if (!string.IsNullOrEmpty(normalizedPretty))
+                    {
+                        var normalizedPath = Path.Combine(OutputDirectory, $"final_output_{timestamp}_v2_normalized.json");
+                        File.WriteAllText(normalizedPath, normalizedPretty, Encoding.UTF8);
+                        Console.WriteLine($"Saved normalized V2 JSON to: {normalizedPath}");
+
+                        // Use normalized JSON for summary
+                        await CreateV2ExtractionSummary(normalizedPretty, timestamp);
+                    }
+                    else
+                    {
+                        Console.WriteLine("Normalization did not produce valid JSON; falling back to merged JSON for summary.");
+                        await CreateV2ExtractionSummary(mergedPretty, timestamp);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Normalization pass failed: {ex.Message}");
+                    Console.WriteLine("Proceeding with merged JSON for summary.");
+                    await CreateV2ExtractionSummary(mergedPretty, timestamp);
                 }
             }
             catch (Exception ex)
@@ -301,6 +422,156 @@ namespace AzureTextReaderApp
                 Console.WriteLine($"An error occurred during V2 ChatCompletion: {ex.Message}");
                 Console.WriteLine($"Stack trace: {ex.StackTrace}");
             }
+        }
+
+        // Split text into chunks trying to cut at paragraph boundaries
+        private static List<string> SplitTextIntoChunks(string text, int maxChunkSize)
+        {
+            var chunks = new List<string>();
+            if (string.IsNullOrEmpty(text)) return chunks;
+
+            var paragraphs = text.Split(new[] { "\n\n" }, StringSplitOptions.None);
+            var sb = new StringBuilder();
+
+            foreach (var p in paragraphs)
+            {
+                if (sb.Length + p.Length + 2 <= maxChunkSize)
+                {
+                    if (sb.Length > 0) sb.Append("\n\n");
+                    sb.Append(p);
+                }
+                else
+                {
+                    if (sb.Length > 0)
+                    {
+                        chunks.Add(sb.ToString());
+                        sb.Clear();
+                    }
+
+                    if (p.Length + 2 > maxChunkSize)
+                    {
+                        // paragraph itself too big, split by lines
+                        var lines = p.Split('\n');
+                        var sbl = new StringBuilder();
+                        foreach (var line in lines)
+                        {
+                            if (sbl.Length + line.Length + 1 <= maxChunkSize)
+                            {
+                                if (sbl.Length > 0) sbl.Append('\n');
+                                sbl.Append(line);
+                            }
+                            else
+                            {
+                                if (sbl.Length > 0)
+                                {
+                                    chunks.Add(sbl.ToString());
+                                    sbl.Clear();
+                                }
+                                if (line.Length > maxChunkSize)
+                                {
+                                    // last resort: hard split
+                                    for (int i = 0; i < line.Length; i += maxChunkSize)
+                                    {
+                                        var part = line.Substring(i, Math.Min(maxChunkSize, line.Length - i));
+                                        chunks.Add(part);
+                                    }
+                                }
+                                else
+                                {
+                                    sbl.Append(line);
+                                }
+                            }
+                        }
+                        if (sbl.Length > 0) chunks.Add(sbl.ToString());
+                    }
+                    else
+                    {
+                        sb.Append(p);
+                    }
+                }
+            }
+
+            if (sb.Length > 0) chunks.Add(sb.ToString());
+            return chunks;
+        }
+
+        // Merge two JsonNode structures into one (target gets merged with source)
+        private static JsonNode MergeJsonNodes(JsonNode target, JsonNode source)
+        {
+            if (source == null) return target;
+            if (target == null) return source.DeepClone();
+
+            if (target is JsonObject tobj && source is JsonObject sobj)
+            {
+                foreach (var kvp in sobj)
+                {
+                    if (!tobj.ContainsKey(kvp.Key))
+                    {
+                        tobj[kvp.Key] = kvp.Value.DeepClone();
+                    }
+                    else
+                    {
+                        var existing = tobj[kvp.Key];
+                        var incoming = kvp.Value;
+
+                        if (existing == null)
+                        {
+                            tobj[kvp.Key] = incoming.DeepClone();
+                        }
+                        else if (existing is JsonObject && incoming is JsonObject)
+                        {
+                            tobj[kvp.Key] = MergeJsonNodes(existing, incoming);
+                        }
+                        else if (existing is JsonArray && incoming is JsonArray)
+                        {
+                            var arr = new JsonArray();
+                            var set = new HashSet<string>();
+                            foreach (var item in (JsonArray)existing)
+                            {
+                                var s = item?.ToJsonString() ?? string.Empty;
+                                if (set.Add(s)) arr.Add(item.DeepClone());
+                            }
+                            foreach (var item in (JsonArray)incoming)
+                            {
+                                var s = item?.ToJsonString() ?? string.Empty;
+                                if (set.Add(s)) arr.Add(item.DeepClone());
+                            }
+                            tobj[kvp.Key] = arr;
+                        }
+                        else
+                        {
+                            // For scalar conflicts: prefer existing non-empty value, otherwise take incoming
+                            var existingStr = existing?.ToString();
+                            var incomingStr = incoming?.ToString();
+                            if (string.IsNullOrWhiteSpace(existingStr) && !string.IsNullOrWhiteSpace(incomingStr))
+                            {
+                                tobj[kvp.Key] = incoming.DeepClone();
+                            }
+                            // else keep existing
+                        }
+                    }
+                }
+                return tobj;
+            }
+            else if (target is JsonArray tarr && source is JsonArray sarr)
+            {
+                var arr = new JsonArray();
+                var set = new HashSet<string>();
+                foreach (var item in tarr)
+                {
+                    var s = item?.ToJsonString() ?? string.Empty;
+                    if (set.Add(s)) arr.Add(item.DeepClone());
+                }
+                foreach (var item in sarr)
+                {
+                    var s = item?.ToJsonString() ?? string.Empty;
+                    if (set.Add(s)) arr.Add(item.DeepClone());
+                }
+                return arr;
+            }
+
+            // Fallback: return target
+            return target;
         }
 
         // Save the final cleaned JSON output with version suffix
@@ -720,50 +991,112 @@ namespace AzureTextReaderApp
         // Extract model text from completion via reflection (kept for backward compatibility)
         private static string ExtractModelTextFromJson(JsonElement completion)
         {
-            var sb = new StringBuilder();
-
-            // Try to read "Content" property
-            if (completion.TryGetProperty("Content", out var contentProp) || completion.TryGetProperty("content", out contentProp))
+            // Helper: recursively search JsonElement for JSON-like string (contains '{' or '[')
+            string? FindJsonString(JsonElement el)
             {
-                if (contentProp.ValueKind == JsonValueKind.Array)
+                try
                 {
-                    foreach (var part in contentProp.EnumerateArray())
+                    switch (el.ValueKind)
                     {
-                        if (part.TryGetProperty("Text", out var textProp) || part.TryGetProperty("text", out textProp))
-                        {
-                            sb.AppendLine(textProp.GetString());
-                        }
+                        case JsonValueKind.String:
+                            var s = el.GetString();
+                            if (!string.IsNullOrWhiteSpace(s) && (s.TrimStart().StartsWith("{") || s.TrimStart().StartsWith("[")))
+                            {
+                                return s;
+                            }
+                            return null;
+
+                        case JsonValueKind.Object:
+                            // Prefer properties named Text/content/Content
+                            foreach (var prop in el.EnumerateObject())
+                            {
+                                var name = prop.Name ?? string.Empty;
+                                if (string.Equals(name, "Text", StringComparison.OrdinalIgnoreCase) ||
+                                    string.Equals(name, "Content", StringComparison.OrdinalIgnoreCase) ||
+                                    string.Equals(name, "Value", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    var res = FindJsonString(prop.Value);
+                                    if (!string.IsNullOrWhiteSpace(res)) return res;
+                                }
+                            }
+
+                            // Otherwise search all properties
+                            foreach (var prop in el.EnumerateObject())
+                            {
+                                var res = FindJsonString(prop.Value);
+                                if (!string.IsNullOrWhiteSpace(res)) return res;
+                            }
+                            return null;
+
+                        case JsonValueKind.Array:
+                            foreach (var item in el.EnumerateArray())
+                            {
+                                var res = FindJsonString(item);
+                                if (!string.IsNullOrWhiteSpace(res)) return res;
+                            }
+                            return null;
+
+                        default:
+                            return null;
                     }
                 }
-                else if (contentProp.ValueKind == JsonValueKind.String)
+                catch
                 {
-                    sb.AppendLine(contentProp.GetString());
+                    return null;
                 }
             }
 
-            // Try "Choices" property
-            if (completion.TryGetProperty("Choices", out var choicesProp) || completion.TryGetProperty("choices", out choicesProp))
+            // Try targeted spots first: Value or value wrapper
+            if (completion.ValueKind == JsonValueKind.Object && (completion.TryGetProperty("Value", out var v) || completion.TryGetProperty("value", out v)))
             {
-                if (choicesProp.ValueKind == JsonValueKind.Array)
+                var found = FindJsonString(v);
+                if (!string.IsNullOrWhiteSpace(found)) return found;
+            }
+
+            // Try Content/choices top-level
+            if (completion.ValueKind == JsonValueKind.Object)
+            {
+                if (completion.TryGetProperty("Content", out var c) || completion.TryGetProperty("content", out c))
                 {
-                    foreach (var choice in choicesProp.EnumerateArray())
+                    var f = FindJsonString(c);
+                    if (!string.IsNullOrWhiteSpace(f)) return f;
+                }
+
+                if (completion.TryGetProperty("Choices", out var ch) || completion.TryGetProperty("choices", out ch))
+                {
+                    var f = FindJsonString(ch);
+                    if (!string.IsNullOrWhiteSpace(f)) return f;
+                }
+            }
+
+            // Fallback: search entire element tree for first JSON-like string
+            var fallback = FindJsonString(completion);
+            if (!string.IsNullOrWhiteSpace(fallback)) return fallback;
+
+            // Last resort: try to extract strings from common nested patterns (Value->Content[0].Text)
+            try
+            {
+                if (completion.ValueKind == JsonValueKind.Object && completion.TryGetProperty("Value", out var maybeVal))
+                {
+                    if (maybeVal.ValueKind == JsonValueKind.Object && (maybeVal.TryGetProperty("Content", out var mContent) || maybeVal.TryGetProperty("content", out mContent)))
                     {
-                        if (choice.TryGetProperty("Message", out var msgProp) || choice.TryGetProperty("message", out msgProp))
+                        if (mContent.ValueKind == JsonValueKind.Array)
                         {
-                            if (msgProp.TryGetProperty("Content", out var msgContent) || msgProp.TryGetProperty("content", out msgContent))
+                            foreach (var part in mContent.EnumerateArray())
                             {
-                                sb.AppendLine(msgContent.GetString());
+                                if (part.ValueKind == JsonValueKind.Object && (part.TryGetProperty("Text", out var tp) || part.TryGetProperty("text", out tp)))
+                                {
+                                    var s = tp.GetString();
+                                    if (!string.IsNullOrWhiteSpace(s)) return s;
+                                }
                             }
                         }
-                        else if (choice.TryGetProperty("Text", out var textProp) || choice.TryGetProperty("text", out textProp))
-                        {
-                            sb.AppendLine(textProp.GetString());
-                        }
                     }
                 }
             }
+            catch { }
 
-            return sb.ToString();
+            return string.Empty;
         }
 
         // Create chat completion options
@@ -905,6 +1238,35 @@ namespace AzureTextReaderApp
             }
 
             return string.Empty;
+        }
+
+        // Read normalization maximum temperature from config or environment, default 0.2f
+        private static float GetNormalizationMaxTemperature()
+        {
+            try
+            {
+                var builder = new ConfigurationBuilder()
+                    .SetBasePath(Directory.GetCurrentDirectory())
+                    .AddJsonFile("appsettings.json", optional: true, reloadOnChange: false)
+                    .AddEnvironmentVariables();
+                var config = builder.Build();
+
+                // Environment variable override
+                var env = Environment.GetEnvironmentVariable("NORMALIZATION_MAX_TEMPERATURE");
+                if (!string.IsNullOrWhiteSpace(env) && float.TryParse(env, out var envVal))
+                {
+                    return envVal;
+                }
+
+                var cfgVal = config["Normalization:MaxTemperature"];
+                if (!string.IsNullOrWhiteSpace(cfgVal) && float.TryParse(cfgVal, out var parsed))
+                {
+                    return parsed;
+                }
+            }
+            catch { }
+
+            return 0.2f; // default
         }
     }
 
