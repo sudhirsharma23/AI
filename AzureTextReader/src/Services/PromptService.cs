@@ -176,8 +176,31 @@ namespace AzureTextReader.Services
             }
 
             // Build user message
-            var userMessage = request.UserMessageTemplate ??
-        $"Please extract and analyze ALL data from the documents below.\n\nDOCUMENTS:\n\n{request.SourceData}";
+            // Strategy:
+            // - Use request.UserMessageTemplate when provided. If it contains the placeholder "{{SOURCE_DATA}}"
+            //   substitute it with the actual SourceData. If not, append the SourceData under a DOCUMENTS section.
+            // - If no template provided, use a sensible default containing the placeholder and substitute it.
+            var sourceData = request.SourceData ?? string.Empty;
+            string userMessage;
+
+            if (!string.IsNullOrEmpty(request.UserMessageTemplate))
+            {
+                if (request.UserMessageTemplate.Contains("{{SOURCE_DATA}}"))
+                {
+                    userMessage = request.UserMessageTemplate.Replace("{{SOURCE_DATA}}", sourceData);
+                }
+                else
+                {
+                    // Template provided but no placeholder - append documents to the end to ensure data inclusion
+                    userMessage = request.UserMessageTemplate + "\n\nDOCUMENTS:\n\n" + sourceData;
+                }
+            }
+            else
+            {
+                // Default template containing placeholder
+                var defaultTemplate = "Please extract and analyze ALL data from the documents below.\n\nDOCUMENTS:\n\n{{SOURCE_DATA}}";
+                userMessage = defaultTemplate.Replace("{{SOURCE_DATA}}", sourceData);
+            }
 
             return new BuiltPrompt
             {

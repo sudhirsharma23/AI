@@ -150,50 +150,187 @@ namespace AzureTextReader.Services
 
             if (Directory.Exists(processedFolder))
             {
-                var jsonFiles = Directory.GetFiles(processedFolder, "*.json").OrderBy(f => f).ToArray();
+                var allJsonFiles = Directory.GetFiles(processedFolder, "*.json");
 
-                if (jsonFiles.Length == 0)
+                if (allJsonFiles.Length == 0)
                 {
                     Console.WriteLine("No processed OCR JSON files found. Exiting.");
                     return;
                 }
 
-                foreach (var jf in jsonFiles)
+                // Prefer merged/combined JSON if present, otherwise use the most recently written JSON file
+                var mergedCandidates = allJsonFiles
+                    .Where(f => Path.GetFileName(f).IndexOf("merged", StringComparison.OrdinalIgnoreCase) >= 0
+                             || Path.GetFileName(f).IndexOf("combined", StringComparison.OrdinalIgnoreCase) >= 0)
+                    .OrderByDescending(f => File.GetLastWriteTimeUtc(f))
+                    .ToArray();
+
+                string[] jsonFilesToProcess;
+                if (mergedCandidates.Length > 0)
+                {
+                    jsonFilesToProcess = new[] { mergedCandidates[0] };
+                    Console.WriteLine($"Found merged/combined JSON candidate to process: {Path.GetFileName(mergedCandidates[0])}");
+                }
+                else
+                {
+                    // Fall back to newest file overall
+                    var newest = allJsonFiles.OrderByDescending(f => File.GetLastWriteTimeUtc(f)).First();
+                    jsonFilesToProcess = new[] { newest };
+                    Console.WriteLine($"No merged file found - will process newest JSON: {Path.GetFileName(newest)}");
+                }
+
+                foreach (var jf in jsonFilesToProcess)
                 {
                     Console.WriteLine($"\n=== Reading processed file: {jf} ===");
                     try
                     {
                         var txt = File.ReadAllText(jf, Encoding.UTF8);
-                        var doc = JsonSerializer.Deserialize<JsonElement>(txt);
 
-                        string imageUrl = doc.TryGetProperty("ImageUrl", out var iu) ? iu.GetString() ?? Path.GetFileName(jf) : Path.GetFileName(jf);
-                        string engine = doc.TryGetProperty("Engine", out var en) ? en.GetString() ?? "unknown" : "unknown";
-                        string markdown = doc.TryGetProperty("Markdown", out var md) ? md.GetString() ?? string.Empty : string.Empty;
-                        string plain = doc.TryGetProperty("PlainText", out var pt) ? pt.GetString() ?? string.Empty : string.Empty;
+                        string imageUrl = Path.GetFileName(jf);
+                        string engine = "unknown";
+                        string resolvedMarkdown = string.Empty;
+                        bool resolvedHasPerFileHeaders = false; // track if resolvedMarkdown already includes per-file headers
 
-                        var ocrResult = new Ocr.OcrResult
+                        try
                         {
-                            ImageUrl = imageUrl,
-                            Markdown = string.IsNullOrWhiteSpace(markdown) ? string.IsNullOrWhiteSpace(plain) ? string.Empty : "" : markdown
-                        };
+                            // Try parse as JSON first
+                            var doc = JsonSerializer.Deserialize<JsonElement>(txt);
 
-                        // Prefer Markdown if present, otherwise construct a simple markdown from plain text
-                        if (string.IsNullOrWhiteSpace(ocrResult.Markdown) && !string.IsNullOrWhiteSpace(plain))
+                            // Prefer explicit image/url/engine when available (case-insensitive)
+                            //if (!TryGetStringPropIgnoreCase(doc, "ImageUrl", out var iuVal) || string.IsNullOrWhiteSpace(iuVal))
+                            //{
+                            //    imageUrl = Path.GetFileName(jf);
+                            //}
+                            //else imageUrl = iuVal;
+
+                            //if (!TryGetStringPropIgnoreCase(doc, "Engine", out var engineVal) || string.IsNullOrWhiteSpace(engineVal))
+                            //{
+                            //    engine = "unknown";
+                            //}
+                            //else engine = engineVal;
+
+
+                            if (doc.TryGetProperty("Files", out var filesElem) && filesElem.ValueKind == JsonValueKind.Array)
+                            {
+                                var mdParts = new List<string>();
+                                var plainParts = new List<string>();
+                                var engines = new List<string>();
+
+                                foreach (var item in filesElem.EnumerateArray())
+                                {
+                                    if (item.ValueKind != JsonValueKind.Object) continue;
+
+                                    // Per-item metadata
+                                    string itemFile = TryGetStringPropIgnoreCase(item, "File", out var itf) && !string.IsNullOrWhiteSpace(itf) ? itf : "(unknown)";
+                                    string itemEngine = TryGetStringPropIgnoreCase(item, "Engine", out var ite) && !string.IsNullOrWhiteSpace(ite) ? ite : "unknown";
+                                    engines.Add(itemEngine);
+
+                                    // Extract Markdown and PlainText (case-insensitive)
+                                    string itemMarkdown = null;
+                                    string itemPlain = null;
+                                    if (TryGetStringPropIgnoreCase(item, "Markdown", out var imdPropStr) && !string.IsNullOrWhiteSpace(imdPropStr))
+                                    {
+                                        itemMarkdown = imdPropStr;
+                                    }
+                                    if (TryGetStringPropIgnoreCase(item, "PlainText", out var iptPropStr) && !string.IsNullOrWhiteSpace(iptPropStr))
+                                    {
+                                        itemPlain = iptPropStr;
+                                    }
+
+                                    // Use Markdown when available, otherwise convert PlainText to simple markdown
+                                    if (!string.IsNullOrWhiteSpace(itemMarkdown))
+                                    {
+                                        var partSb = new StringBuilder();
+                                        partSb.AppendLine($"### Document: {itemFile}");
+                                        partSb.AppendLine($"**OCR Engine**: {itemEngine}");
+                                        partSb.AppendLine();
+                                        partSb.AppendLine(itemMarkdown);
+                                        mdParts.Add(partSb.ToString());
+                                    }
+                                    else if (!string.IsNullOrWhiteSpace(itemPlain))
+                                    {
+                                        var partSb = new StringBuilder();
+                                        partSb.AppendLine($"### Document: {itemFile}");
+                                        partSb.AppendLine($"**OCR Engine**: {itemEngine}");
+                                        partSb.AppendLine();
+                                        partSb.AppendLine("# Extracted Text\n\n" + itemPlain);
+                                        mdParts.Add(partSb.ToString());
+                                    }
+
+                                    // Always collect plain text (prefer PlainText, fallback to Markdown)
+                                    if (!string.IsNullOrWhiteSpace(itemPlain)) plainParts.Add(itemPlain);
+                                    else if (!string.IsNullOrWhiteSpace(itemMarkdown)) plainParts.Add(itemMarkdown);
+                                }
+
+                                if (mdParts.Count > 0)
+                                {
+                                    // Build merged markdown and plain text
+                                    resolvedMarkdown = string.Join("\n\n---\n\n", mdParts);
+                                    var mergedPlain = string.Join("\n\n---\n\n", plainParts);
+
+                                    // Optionally expose merged fields via resolvedHasPerFileHeaders flag
+                                    resolvedHasPerFileHeaders = true;
+                                    imageUrl = Path.GetFileName(jf);
+
+                                    // For debugging and future use, append merged plain and engines info to resolvedMarkdown as a block comment
+                                    // (kept minimal to avoid polluting model input) -- include MergedEngines line
+                                    if (engines.Count > 0)
+                                    {
+                                        resolvedMarkdown = resolvedMarkdown + "\n\n" + "**MergedEngines**: [" + string.Join(", ", engines) + "]";
+                                    }
+                                }
+                            }
+
+                            else if (TryGetStringPropIgnoreCase(doc, "Markdown", out var mdTopStr) && !string.IsNullOrWhiteSpace(mdTopStr))
+                            {
+                                resolvedMarkdown = mdTopStr;
+                            }
+                            else if (TryGetStringPropIgnoreCase(doc, "PlainText", out var ptTopStr) && !string.IsNullOrWhiteSpace(ptTopStr))
+                            {
+                                resolvedMarkdown = "# Extracted Text\n\n" + ptTopStr;
+                            }
+                            else if (TryGetStringPropIgnoreCase(doc, "MergedMarkdown", out var mmStr) && !string.IsNullOrWhiteSpace(mmStr))
+                            {
+                                resolvedMarkdown = mmStr;
+                            }
+                            else if (TryGetStringPropIgnoreCase(doc, "MergedPlainText", out var mpStr) && !string.IsNullOrWhiteSpace(mpStr))
+                            {
+                                resolvedMarkdown = "# Extracted Text\n\n" + mpStr;
+                            }
+                            else
+                            {
+                                // No recognized properties - leave resolvedMarkdown empty
+                                resolvedMarkdown = string.Empty;
+                            }
+                        }
+                        catch (JsonException)
                         {
-                            ocrResult.Markdown = "# Extracted Text\n\n" + plain;
+                            // File is not valid JSON (may contain raw markdown). Treat entire file as markdown content.
+                            resolvedMarkdown = txt ?? string.Empty;
+                            imageUrl = Path.GetFileName(jf);
+                            engine = "raw";
                         }
 
+                        // Add to results and combined markdown
                         allOcrResults.Add(new Ocr.OcrResult
                         {
                             ImageUrl = imageUrl,
-                            Markdown = ocrResult.Markdown
+                            Markdown = resolvedMarkdown
                         });
 
-                        combinedMarkdown.AppendLine($"### Document: {Path.GetFileName(imageUrl)}");
-                        combinedMarkdown.AppendLine($"**OCR Engine**: {engine}");
-                        combinedMarkdown.AppendLine();
-                        combinedMarkdown.AppendLine(ocrResult.Markdown ?? string.Empty);
-                        combinedMarkdown.AppendLine("\n---\n");
+                        // If resolvedMarkdown already contains per-file headers (from Files array), don't prepend another top-level header
+                        if (resolvedHasPerFileHeaders)
+                        {
+                            combinedMarkdown.AppendLine(resolvedMarkdown ?? string.Empty);
+                        }
+                        else
+                        {
+                            combinedMarkdown.AppendLine($"### Document: {Path.GetFileName(imageUrl)}");
+                            combinedMarkdown.AppendLine($"**OCR Engine**: {engine}");
+                            combinedMarkdown.AppendLine();
+                            combinedMarkdown.AppendLine(resolvedMarkdown ?? string.Empty);
+                            combinedMarkdown.AppendLine("\n---\n");
+                        }
 
                         Console.WriteLine($"Loaded processed OCR content from: {jf}");
                     }
@@ -218,6 +355,7 @@ namespace AzureTextReader.Services
             // Step 2: Save combined OCR results to OutputFiles directory
             var timestamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
             var engineName = ocrConfig.Engine.ToLowerInvariant();
+            Directory.CreateDirectory(OutputDirectory);
             var combinedOcrPath = Path.Combine(OutputDirectory, $"combined_ocr_results_{engineName}_{timestamp}.md");
             File.WriteAllText(combinedOcrPath, combinedMarkdown.ToString(), Encoding.UTF8);
             Console.WriteLine($"\n? Saved combined OCR results to: {combinedOcrPath}");
@@ -284,6 +422,7 @@ namespace AzureTextReader.Services
                 });
 
                 Console.WriteLine($"V1 Prompt built successfully (System: {builtPrompt.SystemMessage.Length} chars, User: {builtPrompt.UserMessage.Length} chars)");
+                Console.WriteLine("UserMessage preview (first 1000 chars):\n" + (builtPrompt.UserMessage?.Length > 1000 ? builtPrompt.UserMessage.Substring(0, 1000) : builtPrompt.UserMessage ?? "<null>"));
 
                 // Create messages using built prompt (use simple objects so our local client can reflect over them)
                 var messages = new List<object>
@@ -294,6 +433,14 @@ namespace AzureTextReader.Services
 
                 // Use configured options from ModelConfig
                 var options = CreateChatOptions();
+
+                // Serialize messages for diagnostic logging to confirm user content
+                try
+                {
+                    var msgsJson = JsonSerializer.Serialize(messages);
+                    Console.WriteLine("Prepared messages for CompleteChat: " + msgsJson.Substring(0, Math.Min(2000, msgsJson.Length)));
+                }
+                catch { }
 
                 // Compute a cache key for this combination of messages + options
                 var cacheKey = ComputeCacheKey(messages, options, "v1_combined_documents");
@@ -306,7 +453,7 @@ namespace AzureTextReader.Services
                 }
                 else
                 {
-                    Console.WriteLine($"Cache miss - Calling ChatClient.CompleteChat for V1...");
+                    Console.WriteLine($"Cache miss - Calling ChatClient.CompleteChat for V1... (user message length: {builtPrompt.UserMessage?.Length})");
                     // Create the chat completion request (returns our minimal wrapper)
                     LocalChatCompletion completion = chatClient.CompleteChat(messages, options);
 
@@ -365,6 +512,7 @@ namespace AzureTextReader.Services
                 });
 
                 Console.WriteLine($"V2 Prompt built successfully (System: {builtPrompt.SystemMessage.Length} chars, User: {builtPrompt.UserMessage.Length} chars)");
+                Console.WriteLine("UserMessage preview (first 1000 chars):\n" + (builtPrompt.UserMessage?.Length > 1000 ? builtPrompt.UserMessage.Substring(0, 1000) : builtPrompt.UserMessage ?? "<null>"));
 
                 // Create messages using built prompt (use simple objects so our local client can reflect over them)
                 var messages = new List<object>
@@ -375,6 +523,14 @@ namespace AzureTextReader.Services
 
                 // Use configured options from ModelConfig
                 var options = CreateChatOptions();
+
+                // Serialize messages for diagnostic logging to confirm user content
+                try
+                {
+                    var msgsJson = JsonSerializer.Serialize(messages);
+                    Console.WriteLine("Prepared messages for CompleteChat (V2): " + msgsJson.Substring(0, Math.Min(2000, msgsJson.Length)));
+                }
+                catch { }
 
                 // Compute a cache key for V2
                 var cacheKey = ComputeCacheKey(messages, options, "v2_dynamic_documents");
@@ -387,7 +543,7 @@ namespace AzureTextReader.Services
                 }
                 else
                 {
-                    Console.WriteLine($"Cache miss - Calling ChatClient.CompleteChat for V2...");
+                    Console.WriteLine($"Cache miss - Calling ChatClient.CompleteChat for V2... (user message length: {builtPrompt.UserMessage?.Length})");
                     // Create the chat completion request (returns our minimal wrapper)
                     LocalChatCompletion completion = chatClient.CompleteChat(messages, options);
 
@@ -1018,6 +1174,65 @@ namespace AzureTextReader.Services
             }
 
             return string.Empty;
+        }
+
+        // Helper method to try get string property value from JsonElement, case-insensitively
+        private static bool TryGetStringPropIgnoreCase(JsonElement element, string propertyName, out string value)
+        {
+            value = string.Empty;
+            foreach (var prop in element.EnumerateObject())
+            {
+                if (string.Equals(prop.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (prop.Value.ValueKind == JsonValueKind.String)
+                    {
+                        value = prop.Value.GetString() ?? string.Empty;
+                    }
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Helper method to try get string property value from JsonNode, case-insensitively
+        private static bool TryGetStringPropIgnoreCase(JsonNode node, string propertyName, out string value)
+        {
+            value = string.Empty;
+            if (node is JsonObject obj)
+            {
+                // Case-insensitive search through properties
+                foreach (var kvp in obj)
+                {
+                    if (!string.Equals(kvp.Key, propertyName, StringComparison.OrdinalIgnoreCase)) continue;
+
+                    var v = kvp.Value;
+                    if (v == null)
+                    {
+                        value = string.Empty;
+                        return true;
+                    }
+
+                    if (v is JsonValue jv)
+                    {
+                        try
+                        {
+                            var s = jv.GetValue<string>();
+                            value = s ?? string.Empty;
+                            return true;
+                        }
+                        catch
+                        {
+                            value = jv.ToString() ?? string.Empty;
+                            return true;
+                        }
+                    }
+
+                    // Fallback to ToString for objects/arrays
+                    value = v.ToString() ?? string.Empty;
+                    return true;
+                }
+            }
+            return false;
         }
     }
 
