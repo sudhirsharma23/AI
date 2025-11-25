@@ -13,6 +13,7 @@ using System.IO;
 using AzureTextReader.Configuration;
 using AzureTextReader.Models;
 using AzureTextReader.Services.Ocr;
+using System.Text.RegularExpressions;
 
 namespace AzureTextReader.Services
 {
@@ -359,6 +360,16 @@ namespace AzureTextReader.Services
             var combinedOcrPath = Path.Combine(OutputDirectory, $"combined_ocr_results_{engineName}_{timestamp}.md");
             File.WriteAllText(combinedOcrPath, combinedMarkdown.ToString(), Encoding.UTF8);
             Console.WriteLine($"\n? Saved combined OCR results to: {combinedOcrPath}");
+
+            // Generate comprehensive superset exports for Deed and PCOR to retain all OCR-extracted fields
+            try
+            {
+                GenerateSupersetExports(combinedMarkdown.ToString(), timestamp);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error generating superset exports: {ex.Message}");
+            }
 
             // Step 3: Process with ChatCompletion (with caching)
             // Only load Azure OpenAI config if not already loaded
@@ -1233,6 +1244,193 @@ namespace AzureTextReader.Services
                 }
             }
             return false;
+        }
+
+        // Build comprehensive superset JSON outputs for Deed and PCOR from the combined markdown
+        private static void GenerateSupersetExports(string combinedMarkdown, string timestamp)
+        {
+            if (string.IsNullOrWhiteSpace(combinedMarkdown)) return;
+
+            // Split into document blocks using the same separator used earlier
+            var blocks = combinedMarkdown.Split(new[] { "\n\n---\n\n" }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(b => b.Trim()).Where(b => !string.IsNullOrWhiteSpace(b)).ToArray();
+
+            var deedDocs = new List<JsonObject>();
+            var pcorDocs = new List<JsonObject>();
+            var otherDocs = new List<JsonObject>();
+
+            foreach (var block in blocks)
+            {
+                var jo = ExtractFieldsFromBlock(block);
+
+                // Classify by presence of keywords
+                var blockLower = block.ToLowerInvariant();
+                if (blockLower.Contains("grant deed") || blockLower.Contains("grantor") || blockLower.Contains("grantee") || blockLower.Contains("legal description"))
+                {
+                    deedDocs.Add(jo);
+                }
+                else if (blockLower.Contains("preliminary change of ownership report") || blockLower.Contains("pcor") || blockLower.Contains("assessor"))
+                {
+                    pcorDocs.Add(jo);
+                }
+                else
+                {
+                    otherDocs.Add(jo);
+                }
+            }
+
+            // Build superset schemas by aggregating discovered field names
+            var deedSuperset = BuildSupersetDocument(deedDocs, "deed");
+            var pcorSuperset = BuildSupersetDocument(pcorDocs, "pcor");
+
+            // Always include otherDocs under 'other' for retention
+            var otherSuperset = BuildSupersetDocument(otherDocs, "other");
+
+            // Write JSON outputs
+            var options = new JsonSerializerOptions { WriteIndented = true };
+            var deedPath = Path.Combine(OutputDirectory, $"deed_superset_{timestamp}.json");
+            File.WriteAllText(deedPath, JsonSerializer.Serialize(deedSuperset, options), Encoding.UTF8);
+            Console.WriteLine($"Saved Deed superset to: {deedPath}");
+
+            var pcorPath = Path.Combine(OutputDirectory, $"pcor_superset_{timestamp}.json");
+            File.WriteAllText(pcorPath, JsonSerializer.Serialize(pcorSuperset, options), Encoding.UTF8);
+            Console.WriteLine($"Saved PCOR superset to: {pcorPath}");
+
+            var otherPath = Path.Combine(OutputDirectory, $"other_superset_{timestamp}.json");
+            File.WriteAllText(otherPath, JsonSerializer.Serialize(otherSuperset, options), Encoding.UTF8);
+            Console.WriteLine($"Saved Other superset to: {otherPath}");
+
+            // Save a short README documenting the superset schema and extension process
+            var docSb = new StringBuilder();
+            docSb.AppendLine("# Superset Schema Documentation");
+            docSb.AppendLine();
+            docSb.AppendLine("This document describes the superset schema generated from OCR combined markdown.");
+            docSb.AppendLine();
+            docSb.AppendLine("Files:");
+            docSb.AppendLine($"- {Path.GetFileName(deedPath)} (Deed superset)");
+            docSb.AppendLine($"- {Path.GetFileName(pcorPath)} (PCOR superset)");
+            docSb.AppendLine($"- {Path.GetFileName(otherPath)} (Other documents)");
+            docSb.AppendLine();
+            docSb.AppendLine("Schema notes:");
+            docSb.AppendLine("- Each superset contains:\n  - documents: array of per-block extracted data (file title, engine, raw markdown, plainText, keyValuePairs, dates, amounts, apn, phones, emails)\n  - aggregatedFields: dictionary of discovered simple keys and their collected values\n  - schemaFields: list of all discovered simple keys (union)\n");
+            docSb.AppendLine();
+            docSb.AppendLine("Extending schema:");
+            docSb.AppendLine("- New fields discovered in future scans will be added automatically to schemaFields and aggregatedFields. To permanently add a new typed field to downstream consumers, update the consumer code to reference that key.");
+
+            File.WriteAllText(Path.Combine(OutputDirectory, $"superset_readme_{timestamp}.md"), docSb.ToString(), Encoding.UTF8);
+        }
+
+        private static JsonObject BuildSupersetDocument(List<JsonObject> docs, string docType)
+        {
+            var root = new JsonObject();
+            root["documentType"] = docType;
+            var arr = new JsonArray();
+            var aggregated = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var d in docs)
+            {
+                arr.Add(d);
+
+                // collect keyValuePairs if any
+                if (d.TryGetPropertyValue("keyValuePairs", out var kvNode) && kvNode is JsonObject kvObj)
+                {
+                    foreach (var kv in kvObj)
+                    {
+                        var k = kv.Key;
+                        var v = kv.Value?.ToString() ?? string.Empty;
+                        if (!aggregated.TryGetValue(k, out var list)) { list = new List<string>(); aggregated[k] = list; }
+                        if (!string.IsNullOrWhiteSpace(v) && !list.Contains(v)) list.Add(v);
+                    }
+                }
+            }
+
+            root["documents"] = arr;
+
+            var aggObj = new JsonObject();
+            foreach (var kv in aggregated)
+            {
+                var ja = new JsonArray();
+                foreach (var v in kv.Value) ja.Add(v);
+                aggObj[kv.Key] = ja;
+            }
+
+            root["aggregatedFields"] = aggObj;
+            var schemaArr = new JsonArray();
+            foreach (var k in aggregated.Keys) schemaArr.Add(k);
+            root["schemaFields"] = schemaArr;
+            return root;
+        }
+
+        // Extract many heuristics from a block of markdown/plain text
+        private static JsonObject ExtractFieldsFromBlock(string block)
+        {
+            var jo = new JsonObject();
+            jo["rawText"] = block;
+
+            // Attempt to split title/engine if present in first lines
+            var lines = block.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim()).ToArray();
+            if (lines.Length > 0)
+            {
+                jo["titleLine"] = lines[0];
+                if (lines.Length > 1 && lines[1].StartsWith("**OCR Engine**", StringComparison.OrdinalIgnoreCase))
+                {
+                    // lines[1] like "**OCR Engine**: Aspose.Total OCR"
+                    var idx = lines[1].IndexOf(':');
+                    if (idx >= 0) jo["engine"] = lines[1].Substring(idx + 1).Trim();
+                }
+            }
+
+            // Build keyValuePairs from lines containing ':' reasonably
+            var kv = new JsonObject();
+            foreach (var l in lines)
+            {
+                var parts = l.Split(':', 2);
+                if (parts.Length == 2)
+                {
+                    var key = parts[0].Trim();
+                    var val = parts[1].Trim();
+                    if (!string.IsNullOrWhiteSpace(key)) kv[key] = val;
+                }
+            }
+            jo["keyValuePairs"] = kv;
+
+            // Simple pattern extracts
+            var plain = StripMarkdown(block);
+            jo["plainText"] = plain;
+
+            var dates = new JsonArray();
+            foreach (Match m in System.Text.RegularExpressions.Regex.Matches(plain, @"\b(\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4})\b"))
+            {
+                dates.Add(m.Value);
+            }
+            jo["dates"] = dates;
+
+            var amounts = new JsonArray();
+            foreach (Match m in System.Text.RegularExpressions.Regex.Matches(plain, @"\$\s?[0-9\,]+(\.[0-9]{2})?")) amounts.Add(m.Value);
+            jo["amounts"] = amounts;
+
+            var apnMatch = System.Text.RegularExpressions.Regex.Match(plain, @"\b\d{1,4}[- ]?\d[- ]?\d{1,4}[- ]?\d{1,4}\b");
+            jo["apn"] = apnMatch.Success ? apnMatch.Value : string.Empty;
+
+            var phones = new JsonArray();
+            foreach (Match m in System.Text.RegularExpressions.Regex.Matches(plain, @"\(?\d{3}\)?[-. ]?\d{3}[-. ]?\d{4}")) phones.Add(m.Value);
+            jo["phones"] = phones;
+
+            var emails = new JsonArray();
+            foreach (Match m in System.Text.RegularExpressions.Regex.Matches(plain, @"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")) emails.Add(m.Value);
+            jo["emails"] = emails;
+
+            return jo;
+        }
+
+        private static string StripMarkdown(string md)
+        {
+            if (string.IsNullOrEmpty(md)) return string.Empty;
+            // Very small markdown stripper: remove headings markers and bold/italic markers
+            var s = md.Replace("###", "").Replace("**", "").Replace("__", "");
+            // remove image/link formats [text](url)
+            s = Regex.Replace(s, @"\[(.*?)\]\((.*?)\)", "$1");
+            return s;
         }
     }
 
