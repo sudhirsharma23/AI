@@ -510,8 +510,10 @@ namespace AzureTextReader.Services
                     IncludeRules = false,     // No rules, let AI figure it out
                     RuleNames = new List<string>(),
                     SchemaJson = "",     // NO SCHEMA!
-                    SourceData = combinedMarkdown,
-                    UserMessageTemplate = "Analyze the documents below and extract ALL relevant information dynamically. Focus on:\n" +
+                    SourceData = combinedMarkdown, // Pass combined markdown as SourceData
+                    UserMessageTemplate = "Analyze the documents below and extract ALL relevant information dynamically. " +
+                                         "You MUST use the entire input (all documents/pages/sections) and include all relevant data.\n\n" +
+                                         "Focus on:\n" +
                                          "- Buyer information (names, addresses, percentages, details)\n" +
                                          "- Seller information (old owners)\n" +
                                          "- Property details (address, legal description, parcel info)\n" +
@@ -519,7 +521,7 @@ namespace AzureTextReader.Services
                                          "- Transaction details\n" +
                                          "- PCOR information (if present)\n\n" +
                                          "Return a comprehensive JSON with all findings.\n\n" +
-                                         $"DOCUMENTS:\n\n{combinedMarkdown}"
+                                         "DOCUMENTS:\n\n{{SOURCE_DATA}}"
                 });
 
                 Console.WriteLine($"V2 Prompt built successfully (System: {builtPrompt.SystemMessage.Length} chars, User: {builtPrompt.UserMessage.Length} chars)");

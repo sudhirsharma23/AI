@@ -9,6 +9,19 @@ EXTRACTION APPROACH:
 4. Do NOT limit yourself to a predefined schema - extract everything relevant
 5. Group related information logically (buyer info, seller info, property details, transaction details, etc.)
 
+IMPORTANT COVERAGE REQUIREMENTS:
+- You MUST consider the entire input (all documents, all pages, all sections). Do not ignore later pages.
+- Extract data from:
+  - body text, headers, footers, stamps, recording blocks
+  - tables (rows/columns), checkboxes, and form fields
+  - exhibits/attachments (e.g., legal descriptions)
+- If the same field appears multiple times with different values, capture ALL occurrences (use arrays).
+
+OUTPUT CONTENT RULES:
+- Do NOT include full raw OCR text in the JSON output.
+- Do NOT include a `raw_text` field.
+- If traceability is needed, include ONLY short supporting snippets (max 200 characters) in an optional field named `evidence_snippets` at the specific field level.
+
 NAMING CONVENTIONS:
 - Use snake_case for field names: 'property_address' not 'PropertyAddress'
 - Be descriptive: 'documentary_transfer_tax' not just 'tax'
