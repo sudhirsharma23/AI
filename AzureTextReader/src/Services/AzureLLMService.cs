@@ -54,7 +54,8 @@ namespace AzureTextReader.Services
                             Path.Combine(AppContext.BaseDirectory ?? string.Empty, configured),
                             Path.Combine(AppContext.BaseDirectory ?? string.Empty, "..", "..", "..", configured),
                             Path.Combine(Directory.GetCurrentDirectory(), "..", "..", configured),
-                            Path.Combine(Directory.GetCurrentDirectory(), "src", configured)
+                            Path.Combine(Directory.GetCurrentDirectory(), "src", configured),
+                            Path.Combine(Directory.GetCurrentDirectory(), "src", "Schemas", configured)
                         };
 
                         foreach (var p in relCandidates)
@@ -73,10 +74,16 @@ namespace AzureTextReader.Services
 
             // fallback locations to search
             var candidatePaths = new[] {
+                // new preferred location
+                Path.Combine(Directory.GetCurrentDirectory(), "src", "Schemas", "invoice_schema.json"),
+
+                // previous locations (kept for backward compatibility)
                 Path.Combine(Directory.GetCurrentDirectory(), "src", "invoice_schema.json"),
                 Path.Combine(Directory.GetCurrentDirectory(), "invoice_schema.json"),
                 Path.Combine(AppContext.BaseDirectory ?? string.Empty, "invoice_schema.json"),
-                Path.Combine(AppContext.BaseDirectory ?? string.Empty, "..", "..", "..", "src", "invoice_schema.json")
+                Path.Combine(AppContext.BaseDirectory ?? string.Empty, "Schemas", "invoice_schema.json"),
+                Path.Combine(AppContext.BaseDirectory ?? string.Empty, "..", "..", "..", "src", "invoice_schema.json"),
+                Path.Combine(AppContext.BaseDirectory ?? string.Empty, "..", "..", "..", "src", "Schemas", "invoice_schema.json")
             };
 
             foreach (var p in candidatePaths)
@@ -403,6 +410,9 @@ namespace AzureTextReader.Services
 
             Console.WriteLine("\n--- Version 2: Dynamic Extraction (No Schema) ---");
             await ProcessVersion2(memoryCache, chatClient, combinedMarkdown, timestamp);
+
+            Console.WriteLine("\n--- Version 3: Grant Deed Focused Extraction ---");
+            await ProcessVersion3(memoryCache, chatClient, combinedMarkdown, timestamp);
         }
 
         // VERSION 1: Schema-based extraction (existing logic)
@@ -580,6 +590,80 @@ namespace AzureTextReader.Services
             catch (Exception ex)
             {
                 Console.WriteLine($"An error occurred during V2 ChatCompletion: {ex.Message}");
+                Console.WriteLine($"Stack trace: {ex.StackTrace}");
+            }
+        }
+
+        // VERSION 3: Grant Deed-focused extraction using document_extraction_v3.txt
+        private static async Task ProcessVersion3(IMemoryCache memoryCache, LocalChatClient chatClient, string combinedMarkdown, string timestamp)
+        {
+            try
+            {
+                Console.WriteLine("Building V3 prompt from templates (Grant Deed focused)...");
+                var promptService = new PromptService(memoryCache);
+
+                // V3 uses the system prompt in Prompts/SystemPrompts/document_extraction_v3.txt
+                // and references schema from the new Schemas folder (for consistency, even if not directly embedded by the v3 prompt).
+                string schemaJson = string.Empty;
+                try
+                {
+                    var schemaPath = LocateSchemaPath();
+                    schemaJson = await File.ReadAllTextAsync(schemaPath);
+                }
+                catch
+                {
+                    schemaJson = string.Empty;
+                }
+
+                var builtPrompt = await promptService.BuildCompletePromptAsync(new PromptRequest
+                {
+                    TemplateType = "document_extraction",
+                    Version = "v3",
+                    IncludeExamples = false,
+                    IncludeRules = false,
+                    RuleNames = new List<string>(),
+                    SchemaJson = schemaJson,
+                    SourceData = combinedMarkdown,
+                    UserMessageTemplate = "DOCUMENTS:\n\n{{SOURCE_DATA}}"
+                });
+
+                Console.WriteLine($"V3 Prompt built successfully (System: {builtPrompt.SystemMessage.Length} chars, User: {builtPrompt.UserMessage.Length} chars)");
+
+                var messages = new List<object>
+                {
+                    new { Role = "system", Content = builtPrompt.SystemMessage },
+                    new { Role = "user", Content = builtPrompt.UserMessage }
+                };
+
+                var options = CreateChatOptions();
+                var cacheKey = ComputeCacheKey(messages, options, "v3_grant_deed_documents");
+
+                if (memoryCache.TryGetValue(cacheKey, out var cachedObj) && cachedObj is string cachedJson)
+                {
+                    Console.WriteLine("Cache hit for V3 ChatCompletion - using cached response.");
+                    await SaveFinalCleanedJson(cachedJson, timestamp, "_v3_grant_deed");
+                }
+                else
+                {
+                    Console.WriteLine($"Cache miss - Calling ChatClient.CompleteChat for V3... (user message length: {builtPrompt.UserMessage?.Length})");
+                    LocalChatCompletion completion = chatClient.CompleteChat(messages, options);
+                    var completionJson = JsonSerializer.Serialize(completion, new JsonSerializerOptions() { WriteIndented = true });
+
+                    var cacheEntryOptions = new MemoryCacheEntryOptions
+                    {
+                        AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(7),
+                        SlidingExpiration = TimeSpan.FromHours(24)
+                    };
+
+                    memoryCache.Set(cacheKey, completionJson, cacheEntryOptions);
+                    Console.WriteLine("Cached V3 ChatCompletion result");
+
+                    await SaveFinalCleanedJson(completionJson, timestamp, "_v3_grant_deed");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"An error occurred during V3 ChatCompletion: {ex.Message}");
                 Console.WriteLine($"Stack trace: {ex.StackTrace}");
             }
         }

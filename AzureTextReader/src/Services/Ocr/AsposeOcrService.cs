@@ -6,6 +6,8 @@ using Microsoft.Extensions.Caching.Memory;
 using System.Text;
 using System.Reflection;
 using System.Collections;
+using AzureTextReader.Services;
+using System.Text.Json;
 
 namespace AzureTextReader.Services.Ocr
 {
@@ -400,6 +402,56 @@ namespace AzureTextReader.Services.Ocr
             var hash = sha256.ComputeHash(bytes);
             return Convert.ToHexString(hash);
 
+        }
+
+        /// <summary>
+        /// Version 3: Grant Deed-focused extraction using `document_extraction_v3.txt` system prompt.
+        /// This does NOT change existing OCR behavior; it is an additional flow that can be invoked by callers.
+        /// </summary>
+        public async Task<string> ExtractGrantDeedJsonV3Async(IMemoryCache memoryCache, AzureAIConfig azureConfig, string ocrMarkdown, string cacheKey = null)
+        {
+            if (memoryCache == null) throw new ArgumentNullException(nameof(memoryCache));
+            if (azureConfig == null) throw new ArgumentNullException(nameof(azureConfig));
+            ocrMarkdown ??= string.Empty;
+
+            cacheKey ??= $"GrantDeed_V3_{ComputeHash(ocrMarkdown)}";
+            if (memoryCache.TryGetValue(cacheKey, out var cachedObj) && cachedObj is string cachedJson)
+            {
+                return cachedJson;
+            }
+
+            var promptService = new PromptService(memoryCache);
+            var systemPrompt = await promptService.LoadSystemPromptAsync("document_extraction", "v3");
+
+            var messages = new List<object>
+            {
+                new { Role = "system", Content = systemPrompt },
+                new { Role = "user", Content = ocrMarkdown }
+            };
+
+            var credential = new LocalApiKeyCredential(azureConfig.SubscriptionKey);
+            var azureClient = new LocalAzureOpenAIClient(new Uri(azureConfig.Endpoint), credential);
+            var chatClient = azureClient.GetChatClient(AzureTextReader.Models.AzureOpenAIModelConfig.GPT4oMini.DeploymentName);
+
+            var options = new LocalChatCompletionOptions
+            {
+                Temperature = 0.0f,
+                MaxOutputTokenCount = 2048,
+                TopP = 1.0f,
+                FrequencyPenalty = 0.0f,
+                PresencePenalty = 0.0f
+            };
+
+            var completion = chatClient.CompleteChat(messages, options);
+            var completionJson = JsonSerializer.Serialize(completion, new JsonSerializerOptions { WriteIndented = true });
+
+            memoryCache.Set(cacheKey, completionJson, new MemoryCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(7),
+                SlidingExpiration = TimeSpan.FromHours(24)
+            });
+
+            return completionJson;
         }
     }
 }

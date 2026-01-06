@@ -44,7 +44,7 @@
 		</None>
 
 		<!-- Include invoice schema so it is available at runtime -->
-		<None Update="invoice_schema.json">
+		<None Update="Schemas\invoice_schema.json">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</None>
 	</ItemGroup>

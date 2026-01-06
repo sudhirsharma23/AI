@@ -1,0 +1,279 @@
+﻿Treat the document as a California Grant Deed.
+
+Identify Deed Type from the main title text near the top, e.g., “GRANT DEED”.
+
+Identify Recording Document ID / Number from the recorder header, labeled like “DOC# 2025000065659”.
+
+Identify Recording County and Recorder from the header that mentions “Electronically Recorded in Official Records, County of Ventura, Ventura County Clerk‑Recorder”.
+
+Identify Recording Date and Time from the same header line that contains the document number, date, and time (e.g., “09/15/2025 08:00 AM”).
+
+Identify Grantor(s) (Seller / Current Owner) from the clause:
+
+The party name(s) immediately before the words “hereby GRANT(S) to”.
+
+Identify Grantee(s) (Buyer / New Owner) from the clause:
+
+The party name(s) immediately after the words “hereby GRANT(S) to”.
+
+Interpret any phrases like “HUSBAND AND WIFE AS JOINT TENANTS” as part of the grantor vesting description, not separate names.
+
+Interpret any phrases like “AS CO‑TRUSTEES OF THE [TRUST NAME]” as part of the grantee capacity / trust information.
+
+Identify the Deed Date from the line beginning with “Dated:” near the signature block.
+
+Identify the Notary Name from the acknowledgment section following the word “before me,” and the Notary County and State from the acknowledgment heading.
+
+Identify the APN (Assessor’s Parcel Number) from any line labeled “APN:” (e.g., “APN: 551‑0‑151‑585”).
+
+Identify the Legal Description from Exhibit “A” or the section indicated by “SEE ATTACHED EXHIBIT ‘A’”.
+
+If Exhibit “A” contains “LOT … OF TRACT NO. …” language, treat the entire block as the legal description text.
+
+If there is language beginning with “EXCEPT THEREFROM…”, include this as part of the legal description because it describes reserved mineral or other rights.
+
+Identify grantor and grantee addresses when present:
+- Grantor mailing address or address appearing near grantor identification/signature.
+- Grantee mailing address (often “Mail tax statements to” or similar) or address appearing near grantee identification.
+- If multiple grantors/grantees exist, return the best primary address (or the first clearly associated address). If no address is present, keep fields empty.
+
+PCOR (PRELIMINARY CHANGE OF OWNERSHIP REPORT) EXTRACTION (WHEN PRESENT):
+- If the documents include a PCOR form/section (keywords: “Preliminary Change of Ownership Report”, “PCOR”, “Assessor”, “Documentary Transfer Tax”, “BOE-502-A”, “Part 1”, “Part 2”, “Part 3”, “Part 4”, “Certification”), extract PCOR information in addition to grant deed fields.
+- Parse the PCOR and map its contents into the structured `pcor` object below.
+- PCOR commonly contains:
+  - Part 1: Transfer Information
+  - Part 2: Other Transfer Information
+  - Part 3: Purchase Price and Terms of Sale
+  - Part 4: Property Information
+  - Certification
+- Extract as many fields as present.
+- Record checkbox/exemption selections as explicit boolean fields and/or arrays of selected codes.
+- For Parts 1-4, capture both:
+  - a structured interpretation (e.g., transfer type, dates, amounts)
+  - and the raw checkbox selections (as a map of label -> true/false)
+- If a PCOR field is not present, return an empty string, null, false, or an empty array/object (as appropriate), but keep the `pcor` object present in the output.
+
+Return JSON only.
+
+{
+  "deed_type": "",
+  "recording_document_number": "",
+  "recording_county": "",
+  "recording_date": "",
+  "recording_time": "",
+  "grantors": [],
+  "grantor_vesting": "",
+  "grantees": [],
+  "grantee_capacity": "",
+  "trust_name": "",
+  "deed_execution_date": "",
+  "notary_name": "",
+  "notary_state": "",
+  "notary_county": "",
+  "apn": "",
+  "legal_description": "",
+  "grantors_address": {
+    "street": "",
+    "city": "",
+    "state": "",
+    "zip_code": ""
+  },
+  "grantees_address": {
+    "street": "",
+    "city": "",
+    "state": "",
+    "zip_code": ""
+  },
+  "property_address": {
+    "street": "",
+    "city": "",
+    "state": "",
+    "zip_code": ""
+  },
+  "pcor": {
+    "present": false,
+
+    "form_metadata": {
+      "form_name": "",
+      "form_number": "",
+      "form_revision": "",
+      "page_count": "",
+      "county": "",
+      "assessor_office": "",
+      "recording_header": ""
+    },
+
+    "buyer_transferee": {
+      "names": [],
+      "mailing_address": "",
+      "daytime_phone": "",
+      "email": "",
+      "principal_residence_intended": null,
+      "principal_residence_occupancy_date": "",
+      "disabled_veteran_or_surviving_spouse": null,
+      "mail_property_tax_to_name": "",
+      "mail_property_tax_to_address": ""
+    },
+
+    "seller_transferor_names": [],
+
+    "part_1_transfer_information": {
+      "transfer_date": "",
+      "transfer_type": "",
+      "consideration_value": "",
+      "documentary_transfer_tax": "",
+      "is_partial_interest": null,
+      "percent_transferred": "",
+      "checkboxes": {
+        "A_spouses": false,
+        "B_domestic_partners": false,
+        "C_parent_child_or_grandparent_grandchild": false,
+        "D_cotenant_death": false,
+        "E_replace_principal_residence_over_55": false,
+        "F_replace_principal_residence_severely_disabled": false,
+        "G_replace_principal_residence_disaster": false,
+        "H_name_correction": false,
+        "I_lender_interest": false,
+        "J_financing_security_interest": false,
+        "K_substitute_trustee": false,
+        "L_revocable_or_irrevocable_trust": false,
+        "M_lease_35_years": false,
+        "N_proportional_interests_same": false,
+        "O_low_income_housing": false,
+        "P_first_purchaser_solar": false,
+        "Q_other": false
+      },
+      "other_explanation": "",
+      "additional_information": ""
+    },
+
+    "part_2_other_transfer_information": {
+      "date_of_transfer_if_other_than_recording": "",
+      "type_of_transfer": {
+        "purchase": false,
+        "foreclosure": false,
+        "gift": false,
+        "trade_or_exchange": false,
+        "merger_stock_or_partnership_acquisition": false,
+        "inheritance": false,
+        "inheritance_date_of_death": "",
+        "contract_of_sale": false,
+        "contract_date": "",
+        "sale_leaseback": false,
+        "creation_of_lease": false,
+        "assignment_of_lease": false,
+        "termination_of_lease": false,
+        "termination_lease_began_date": "",
+        "remaining_term_years": "",
+        "other": false,
+        "other_explanation": ""
+      },
+      "partial_interest_transferred": null,
+      "percentage_transferred": "",
+      "remarks": "",
+      "checkboxes": {}
+    },
+
+    "part_3_purchase_price_and_terms_of_sale": {
+      "total_purchase_price": "",
+      "cash_down_payment_or_trade_value": "",
+      "first_deed_of_trust": {
+        "amount": "",
+        "interest_rate": "",
+        "term_years": "",
+        "monthly_payment": "",
+        "due_date": "",
+        "loan_type": {
+          "fha": false,
+          "va": false,
+          "cal_vet": false,
+          "bank_savings_loan_credit_union": false,
+          "loan_carried_by_seller": false
+        },
+        "rate_type": {
+          "fixed": false,
+          "variable": false
+        }
+      },
+      "second_deed_of_trust": {
+        "amount": "",
+        "interest_rate": "",
+        "term_years": "",
+        "monthly_payment": "",
+        "due_date": "",
+        "balloon_payment": "",
+        "loan_type": {
+          "bank_savings_loan_credit_union": false,
+          "loan_carried_by_seller": false
+        },
+        "rate_type": {
+          "fixed": false,
+          "variable": false
+        }
+      },
+      "improvement_bond_assumed": null,
+      "improvement_bond_outstanding_balance": "",
+      "buyer_paid_commission_fees_not_included": "",
+      "broker": {
+        "through_broker": null,
+        "broker_name": "",
+        "phone": ""
+      },
+      "purchase_source": {
+        "direct_from_seller": false,
+        "from_family_member": false,
+        "family_relationship": "",
+        "other": false,
+        "other_explanation": ""
+      },
+      "special_terms": "",
+      "checkboxes": {}
+    },
+
+    "part_4_property_information": {
+      "property_address": "",
+      "apn": "",
+      "property_type": {
+        "single_family_residence": false,
+        "multiple_family_residence": false,
+        "multiple_family_units": "",
+        "condominium": false,
+        "co_op": false,
+        "manufactured_home": false,
+        "unimproved_lot": false,
+        "timeshare": false,
+        "commercial_industrial": false,
+        "other": false,
+        "other_description": ""
+      },
+      "personal_property_included": null,
+      "personal_property_value": "",
+      "incentives_value": "",
+      "manufactured_home_included": null,
+      "manufactured_home_value": "",
+      "manufactured_home_subject_to_local_tax": null,
+      "manufactured_home_decal_number": "",
+      "produces_rental_or_other_income": null,
+      "income_type": {
+        "lease_rent": false,
+        "contract": false,
+        "mineral_rights": false,
+        "other": false,
+        "other_description": ""
+      },
+      "property_condition": "",
+      "property_condition_description": "",
+      "checkboxes": {}
+    },
+
+    "certification": {
+      "certified_by_printed": "",
+      "title_or_capacity": "",
+      "signature": "",
+      "signature_date": "",
+      "phone": "",
+      "email": "",
+      "signed": null
+    }
+  }
+}
