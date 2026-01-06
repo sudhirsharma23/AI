@@ -12,6 +12,10 @@ Identify Escrow Number from any line labeled like “Escrow No.”, “Escrow #�
 
 Identify Title Number from any line labeled like “Title No.”, “Title #”, “Title Order No.”, or “Title Number”.
 
+Identify Order Number from any line labeled like “Order No.”, “Order #”, “Order Number”, or similar.
+
+Identify Total Fees from any recorder/fee section (e.g., “Total Fees”, “Total Fee”, “Fees:”, “Recording Fee”, “Total Charges”). Prefer a currency string (e.g., "$43.00").
+
 Identify Grantor(s) (Seller / Current Owner) from the clause:
 
 The party name(s) immediately before the words “hereby GRANT(S) to”.
@@ -71,8 +75,10 @@ Return JSON only.
   "recording_county": "",
   "recording_date": "",
   "recording_time": "",
+  "order_number": "",
   "escrow_number": "",
   "title_number": "",
+  "total_fees": "",
   "grantors": [],
   "grantor_vesting": "",
   "grantees": [],
