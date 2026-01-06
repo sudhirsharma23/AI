@@ -8,6 +8,10 @@ Identify Recording County and Recorder from the header that mentions “Electron
 
 Identify Recording Date and Time from the same header line that contains the document number, date, and time (e.g., “09/15/2025 08:00 AM”).
 
+Identify Escrow Number from any line labeled like “Escrow No.”, “Escrow #”, or “Escrow Number”.
+
+Identify Title Number from any line labeled like “Title No.”, “Title #”, “Title Order No.”, or “Title Number”.
+
 Identify Grantor(s) (Seller / Current Owner) from the clause:
 
 The party name(s) immediately before the words “hereby GRANT(S) to”.
@@ -23,6 +27,8 @@ Interpret any phrases like “AS CO‑TRUSTEES OF THE [TRUST NAME]” as part of
 Identify the Deed Date from the line beginning with “Dated:” near the signature block.
 
 Identify the Notary Name from the acknowledgment section following the word “before me,” and the Notary County and State from the acknowledgment heading.
+
+Identify the Notary Commission Expiration Date when present (often labeled like “My commission expires”, “Commission expires”, or similar).
 
 Identify the APN (Assessor’s Parcel Number) from any line labeled “APN:” (e.g., “APN: 551‑0‑151‑585”).
 
@@ -51,6 +57,10 @@ PCOR (PRELIMINARY CHANGE OF OWNERSHIP REPORT) EXTRACTION (WHEN PRESENT):
 - For Parts 1-4, capture both:
   - a structured interpretation (e.g., transfer type, dates, amounts)
   - and the raw checkbox selections (as a map of label -> true/false)
+- CERTIFICATION (REQUIRED WHEN PCOR PRESENT):
+  - If `pcor.present` is true, you MUST populate `pcor.certification` from the Certification section.
+  - Extract values such as the printed name, signature text, signature date, phone number, email address, and any title/capacity label.
+  - If a specific certification field is not visible, leave it empty/null, but DO NOT omit the `pcor.certification` object.
 - If a PCOR field is not present, return an empty string, null, false, or an empty array/object (as appropriate), but keep the `pcor` object present in the output.
 
 Return JSON only.
@@ -61,6 +71,8 @@ Return JSON only.
   "recording_county": "",
   "recording_date": "",
   "recording_time": "",
+  "escrow_number": "",
+  "title_number": "",
   "grantors": [],
   "grantor_vesting": "",
   "grantees": [],
@@ -70,6 +82,7 @@ Return JSON only.
   "notary_name": "",
   "notary_state": "",
   "notary_county": "",
+  "notary_commission_expiration_date": "",
   "apn": "",
   "legal_description": "",
   "grantors_address": {
