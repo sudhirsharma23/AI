@@ -9,11 +9,8 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Caching.Memory;
 using Oasis.DeedProcessor.BusinessEntities.Configuration;
-using Oasis.DeedProcessor.BusinessEntities.Models;
 using Oasis.DeedProcessor.BusinessEntities.Ocr;
 using Oasis.DeedProcessor.Interface.Ocr;
-using Oasis.DeedProcessor.ServiceAgent.Azure.OpenAI;
-using Oasis.DeedProcessor.ServiceAgent.Prompts;
 
 namespace Oasis.DeedProcessor.ServiceAgent.Azure.Ocr
 {
@@ -157,48 +154,6 @@ namespace Oasis.DeedProcessor.ServiceAgent.Azure.Ocr
             {
                 try { if (File.Exists(temp)) File.Delete(temp); } catch { }
             }
-        }
-
-        public async Task<string> ExtractGrantDeedJsonV3Async(string ocrMarkdown, string? cacheKey = null)
-        {
-            ocrMarkdown ??= string.Empty;
-
-            cacheKey ??= $"GrantDeed_V3_{ComputeHash(ocrMarkdown)}";
-            if (_cache.TryGetValue(cacheKey, out var cachedObj) && cachedObj is string cachedJson)
-                return cachedJson;
-
-            var promptService = new PromptService(_cache);
-            var systemPrompt = await promptService.LoadSystemPromptAsync("document_extraction", "v3");
-
-            var messages = new List<object>
-            {
-                new { Role = "system", Content = systemPrompt },
-                new { Role = "user", Content = ocrMarkdown }
-            };
-
-            var credential = new LocalApiKeyCredential(_azureConfig.SubscriptionKey);
-            var azureClient = new LocalAzureOpenAIClient(new Uri(_azureConfig.Endpoint), credential, _httpClient);
-            var chatClient = azureClient.GetChatClient(AzureOpenAIModelConfig.GPT4oMini.DeploymentName);
-
-            var options = new LocalChatCompletionOptions
-            {
-                Temperature = 0.0f,
-                MaxOutputTokenCount = 2048,
-                TopP = 1.0f,
-                FrequencyPenalty = 0.0f,
-                PresencePenalty = 0.0f
-            };
-
-            var completion = chatClient.CompleteChat(messages, options);
-            var completionJson = JsonSerializer.Serialize(completion, new JsonSerializerOptions { WriteIndented = true });
-
-            _cache.Set(cacheKey, completionJson, new MemoryCacheEntryOptions
-            {
-                AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(7),
-                SlidingExpiration = TimeSpan.FromHours(24)
-            });
-
-            return completionJson;
         }
 
         private async Task<string> ExtractOcrFromImageAsync(string endpoint, string subscriptionKey, string imageUrl)

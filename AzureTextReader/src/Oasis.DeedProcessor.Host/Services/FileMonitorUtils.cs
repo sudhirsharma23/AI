@@ -20,7 +20,6 @@ namespace Oasis.DeedProcessor.Host.Services
             var fi = new FileInfo(path);
             var lastWrite = fi.LastWriteTimeUtc;
             var now = DateTime.UtcNow;
-            // stable if last seen is older than stableSeconds and last write hasn't changed since
             return (now - lastSeenUtc).TotalSeconds >= stableSeconds && (now - lastWrite).TotalSeconds >= stableSeconds;
         }
 
@@ -39,7 +38,6 @@ namespace Oasis.DeedProcessor.Host.Services
             }
             catch
             {
-                // ignore
             }
             return set;
         }

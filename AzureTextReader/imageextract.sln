@@ -8,6 +8,16 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AzureTextReader", "src\Azur
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AzureTextReader.Tests", "test\AzureTextReader.Tests\AzureTextReader.Tests.csproj", "{FF42DDC8-3056-547C-F786-5C245EDBD1D7}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Oasis.DeedProcessor.Interface", "src\Oasis.DeedProcessor.Interface\Oasis.DeedProcessor.Interface.csproj", "{9CF78CB1-0E48-D8C9-3E8A-E0AD22899FA5}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Oasis.DeedProcessor.ServiceAgent", "src\Oasis.DeedProcessor.ServiceAgent\Oasis.DeedProcessor.ServiceAgent.csproj", "{406F2BD6-FDCF-C1F3-DD94-4631F035C5BC}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Oasis.DeedProcessor.ServiceAgent.Azure", "src\Oasis.DeedProcessor.ServiceAgent.Azure\Oasis.DeedProcessor.ServiceAgent.Azure.csproj", "{E3E2F516-F6BD-0F0D-478B-C13FF2F62F6A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Oasis.DeedProcessor.BusinessEntities", "src\Oasis.DeedProcessor.BusinessEntities\Oasis.DeedProcessor.BusinessEntities.csproj", "{46A81344-37A9-0D2F-A23F-45180B8444A6}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Oasis.DeedProcessor.Host", "src\Oasis.DeedProcessor.Host\Oasis.DeedProcessor.Host.csproj", "{BBD90604-0D66-8D9B-61BC-8BCE2490F82F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -22,6 +32,26 @@ Global
 		{FF42DDC8-3056-547C-F786-5C245EDBD1D7}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{FF42DDC8-3056-547C-F786-5C245EDBD1D7}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{FF42DDC8-3056-547C-F786-5C245EDBD1D7}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9CF78CB1-0E48-D8C9-3E8A-E0AD22899FA5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9CF78CB1-0E48-D8C9-3E8A-E0AD22899FA5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9CF78CB1-0E48-D8C9-3E8A-E0AD22899FA5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9CF78CB1-0E48-D8C9-3E8A-E0AD22899FA5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{406F2BD6-FDCF-C1F3-DD94-4631F035C5BC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{406F2BD6-FDCF-C1F3-DD94-4631F035C5BC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{406F2BD6-FDCF-C1F3-DD94-4631F035C5BC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{406F2BD6-FDCF-C1F3-DD94-4631F035C5BC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E3E2F516-F6BD-0F0D-478B-C13FF2F62F6A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E3E2F516-F6BD-0F0D-478B-C13FF2F62F6A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E3E2F516-F6BD-0F0D-478B-C13FF2F62F6A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E3E2F516-F6BD-0F0D-478B-C13FF2F62F6A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{46A81344-37A9-0D2F-A23F-45180B8444A6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{46A81344-37A9-0D2F-A23F-45180B8444A6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{46A81344-37A9-0D2F-A23F-45180B8444A6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{46A81344-37A9-0D2F-A23F-45180B8444A6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BBD90604-0D66-8D9B-61BC-8BCE2490F82F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BBD90604-0D66-8D9B-61BC-8BCE2490F82F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BBD90604-0D66-8D9B-61BC-8BCE2490F82F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BBD90604-0D66-8D9B-61BC-8BCE2490F82F}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -29,6 +59,7 @@ Global
 	GlobalSection(NestedProjects) = preSolution
 		{38E98957-1D0A-05BB-A060-CAB2111A745E} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{FF42DDC8-3056-547C-F786-5C245EDBD1D7} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{BBD90604-0D66-8D9B-61BC-8BCE2490F82F} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {80121B3F-D766-4329-ABD3-60B9FAD689CB}

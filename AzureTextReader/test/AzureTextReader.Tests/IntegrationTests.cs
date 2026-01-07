@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -60,6 +61,7 @@ namespace AzureTextReader.Tests
             .ConfigureLogging(logging => logging.SetMinimumLevel(LogLevel.Warning))
             .ConfigureServices((ctx, services) =>
             {
+                services.AddMemoryCache();
                 services.AddSingleton<IOptions<FileMonitorOptions>>(Options.Create(options));
                 services.AddSingleton<IOcrService>(new FakeOcrService());
                 services.AddHostedService<FileMonitorBackgroundService>();

@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
 	<PropertyGroup>
 		<OutputType>Exe</OutputType>
@@ -11,11 +11,36 @@
 	</PropertyGroup>
 
 	<ItemGroup>
+		<ProjectReference Include="Oasis.DeedProcessor.Host\Oasis.DeedProcessor.Host.csproj" />
+		<ProjectReference Include="Oasis.DeedProcessor.BusinessEntities\Oasis.DeedProcessor.BusinessEntities.csproj" />
+		<ProjectReference Include="Oasis.DeedProcessor.Interface\Oasis.DeedProcessor.Interface.csproj" />
+		<ProjectReference Include="Oasis.DeedProcessor.ServiceAgent\Oasis.DeedProcessor.ServiceAgent.csproj" />
+		<ProjectReference Include="Oasis.DeedProcessor.ServiceAgent.Azure\Oasis.DeedProcessor.ServiceAgent.Azure.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<!-- Prevent double-compiling host project sources into the executable -->
+		<Compile Remove="Oasis.DeedProcessor.Host\**" />
+		<EmbeddedResource Remove="Oasis.DeedProcessor.Host\**" />
+		<None Remove="Oasis.DeedProcessor.Host\**" />
+
 		<!-- Prevent double-compiling library project sources into the executable -->
-		<Compile Remove="Oasis.DeedProcessor.BusinessEntities\**\*.cs" />
-		<Compile Remove="Oasis.DeedProcessor.Interface\**\*.cs" />
-		<Compile Remove="Oasis.DeedProcessor.ServiceAgent\**\*.cs" />
-		<Compile Remove="Oasis.DeedProcessor.ServiceAgent.Azure\**\*.cs" />
+		<Compile Remove="Host\**" />
+		<EmbeddedResource Remove="Host\**" />
+		<None Remove="Host\**" />
+
+		<Compile Remove="Oasis.DeedProcessor.BusinessEntities\**" />
+		<Compile Remove="Oasis.DeedProcessor.Interface\**" />
+		<Compile Remove="Oasis.DeedProcessor.ServiceAgent.Azure\**" />
+		<Compile Remove="Oasis.DeedProcessor.ServiceAgent\**" />
+		<EmbeddedResource Remove="Oasis.DeedProcessor.BusinessEntities\**" />
+		<EmbeddedResource Remove="Oasis.DeedProcessor.Interface\**" />
+		<EmbeddedResource Remove="Oasis.DeedProcessor.ServiceAgent.Azure\**" />
+		<EmbeddedResource Remove="Oasis.DeedProcessor.ServiceAgent\**" />
+		<None Remove="Oasis.DeedProcessor.BusinessEntities\**" />
+		<None Remove="Oasis.DeedProcessor.Interface\**" />
+		<None Remove="Oasis.DeedProcessor.ServiceAgent.Azure\**" />
+		<None Remove="Oasis.DeedProcessor.ServiceAgent\**" />
 	</ItemGroup>
 
 	<ItemGroup>
@@ -31,13 +56,6 @@
 		<PackageReference Include="Microsoft.ApplicationInsights.AspNetCore" Version="2.23.0" />
 		<PackageReference Include="Microsoft.ApplicationInsights.WorkerService" Version="2.23.0" />
 		<PackageReference Include="prometheus-net.AspNetCore" Version="8.2.1" />
-	</ItemGroup>
-
-	<ItemGroup>
-		<ProjectReference Include="Oasis.DeedProcessor.BusinessEntities\Oasis.DeedProcessor.BusinessEntities.csproj" />
-		<ProjectReference Include="Oasis.DeedProcessor.Interface\Oasis.DeedProcessor.Interface.csproj" />
-		<ProjectReference Include="Oasis.DeedProcessor.ServiceAgent\Oasis.DeedProcessor.ServiceAgent.csproj" />
-		<ProjectReference Include="Oasis.DeedProcessor.ServiceAgent.Azure\Oasis.DeedProcessor.ServiceAgent.Azure.csproj" />
 	</ItemGroup>
 
 	<ItemGroup>

@@ -12,7 +12,9 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
 using Oasis.DeedProcessor.BusinessEntities.Configuration;
+using Oasis.DeedProcessor.Interface.Llm;
 using Oasis.DeedProcessor.Interface.Ocr;
+using Oasis.DeedProcessor.ServiceAgent.Azure.Llm;
 using Oasis.DeedProcessor.Host.Ocr;
 using Oasis.DeedProcessor.Host.Services;
 
@@ -59,6 +61,9 @@ namespace Oasis.DeedProcessor
 
             builder.Services.AddMemoryCache();
             builder.Services.AddHttpClient();
+
+            // LLM orchestration (optional usage from background service)
+            builder.Services.AddSingleton<ILlmService, AzureLlmService>();
 
             var sbConn = Environment.GetEnvironmentVariable("SERVICE_BUS_CONNECTION") ?? builder.Configuration["ServiceBus:ConnectionString"];
             if (!string.IsNullOrWhiteSpace(sbConn))

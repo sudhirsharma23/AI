@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -8,14 +7,11 @@ using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Oasis.DeedProcessor.BusinessEntities.Configuration;
+using Oasis.DeedProcessor.Interface.Llm;
 using Oasis.DeedProcessor.Interface.Ocr;
 
 namespace Oasis.DeedProcessor.Host.Services
 {
-    /// <summary>
-    /// Options for file monitor service - bound from configuration
-    /// </summary>
     public class FileMonitorOptions
     {
         public string IncomingFolder { get; set; } = "incoming";
@@ -24,17 +20,14 @@ namespace Oasis.DeedProcessor.Host.Services
         public string ProcessedFolder { get; set; } = "processed";
         public string FailedFolder { get; set; } = "failed";
         public int PollIntervalSeconds { get; set; } = 5;
-        public int FileStableSeconds { get; set; } = 3; // consider file stable if size unchanged for this many seconds
+        public int FileStableSeconds { get; set; } = 3;
         public int MaxDegreeOfParallelism { get; set; } = 2;
         public int MaxRetries { get; set; } = 3;
         public int RetryBaseDelayMs { get; set; } = 1000;
-        public bool UseFileSystemWatcher { get; set; } = false; // optional
+        public bool UseFileSystemWatcher { get; set; } = false;
         public string StateFolder { get; set; } = "state";
     }
 
-    /// <summary>
-    /// Background service which monitors a folder and processes incoming files using IOcrService
-    /// </summary>
     public class FileMonitorBackgroundService : BackgroundService
     {
         private readonly ILogger<FileMonitorBackgroundService> _logger;
@@ -48,21 +41,23 @@ namespace Oasis.DeedProcessor.Host.Services
         private readonly CancellationTokenSource _internalCts = new();
         private readonly ServiceBusClient? _serviceBusClient;
         private readonly string? _serviceBusQueueName;
-        private readonly IMemoryCache _memoryCache; // injected cache
+        private readonly IMemoryCache _memoryCache;
+        private readonly ILlmService? _llmService;
 
         public FileMonitorBackgroundService(
-        ILogger<FileMonitorBackgroundService> logger,
-        IOcrService ocrService,
-        IOptions<FileMonitorOptions> options,
-        IServiceProvider sp,
-        IMemoryCache memoryCache)
+            ILogger<FileMonitorBackgroundService> logger,
+            IOcrService ocrService,
+            IOptions<FileMonitorOptions> options,
+            IServiceProvider sp,
+            IMemoryCache memoryCache,
+            ILlmService? llmService = null)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _ocrService = ocrService ?? throw new ArgumentNullException(nameof(ocrService));
             _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
             _memoryCache = memoryCache ?? throw new ArgumentNullException(nameof(memoryCache));
+            _llmService = llmService;
 
-            // ServiceBus client optional
             try
             {
                 var cfg = sp.GetService(typeof(ServiceBusClient)) as ServiceBusClient;
@@ -78,7 +73,6 @@ namespace Oasis.DeedProcessor.Host.Services
                 _logger.LogWarning(ex, "ServiceBus client not configured; falling back to in-memory channel");
             }
 
-            // Ensure folders exist
             Directory.CreateDirectory(_options.IncomingFolder);
             Directory.CreateDirectory(_options.StagingFolder);
             Directory.CreateDirectory(_options.ProcessingFolder);
@@ -137,7 +131,6 @@ namespace Oasis.DeedProcessor.Host.Services
 
             var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, _internalCts.Token);
 
-            // If service bus configured - create processor
             ServiceBusProcessor? processor = null;
             if (_serviceBusClient != null && !string.IsNullOrWhiteSpace(_serviceBusQueueName))
             {
@@ -146,6 +139,7 @@ namespace Oasis.DeedProcessor.Host.Services
                     MaxConcurrentCalls = _options.MaxDegreeOfParallelism,
                     AutoCompleteMessages = false
                 });
+
                 processor.ProcessMessageAsync += async args =>
                 {
                     var body = args.Message.Body.ToString();
@@ -158,8 +152,15 @@ namespace Oasis.DeedProcessor.Host.Services
                             if (!string.IsNullOrWhiteSpace(path))
                             {
                                 await _workerSemaphore.WaitAsync(linkedCts.Token);
-                                try { await ProcessFileAsync(path, linkedCts.Token); await args.CompleteMessageAsync(args.Message, linkedCts.Token); }
-                                finally { _workerSemaphore.Release(); }
+                                try
+                                {
+                                    await ProcessFileAsync(path, linkedCts.Token);
+                                    await args.CompleteMessageAsync(args.Message, linkedCts.Token);
+                                }
+                                finally
+                                {
+                                    _workerSemaphore.Release();
+                                }
                             }
                         }
                     }
@@ -169,22 +170,22 @@ namespace Oasis.DeedProcessor.Host.Services
                         await args.DeadLetterMessageAsync(args.Message, cancellationToken: linkedCts.Token);
                     }
                 };
+
                 processor.ProcessErrorAsync += args =>
                 {
                     _logger.LogError(args.Exception, "ServiceBus processor error");
                     return Task.CompletedTask;
                 };
+
                 await processor.StartProcessingAsync(linkedCts.Token);
             }
 
-            // Start in-memory workers as well to handle fallback or direct enqueued files
             var workers = new List<Task>();
             for (int i = 0; i < _options.MaxDegreeOfParallelism; i++)
             {
                 workers.Add(Task.Run(() => WorkerLoopAsync(linkedCts.Token), linkedCts.Token));
             }
 
-            // Start monitor loop
             try
             {
                 if (_options.UseFileSystemWatcher)
@@ -192,16 +193,9 @@ namespace Oasis.DeedProcessor.Host.Services
                     using var watcher = CreateFileSystemWatcher(_options.IncomingFolder);
                     watcher.EnableRaisingEvents = true;
 
-                    // Also run periodic sweep to catch missed files
                     while (!linkedCts.Token.IsCancellationRequested)
                     {
-                        try
-                        {
-                            await ScanAndEnqueueAsync(linkedCts.Token);
-                        }
-                        catch (OperationCanceledException) { break; }
-                        catch (Exception ex) { _logger.LogError(ex, "Error during periodic scan"); }
-
+                        await ScanAndEnqueueAsync(linkedCts.Token);
                         await Task.Delay(TimeSpan.FromSeconds(_options.PollIntervalSeconds), linkedCts.Token);
                     }
                 }
@@ -209,16 +203,13 @@ namespace Oasis.DeedProcessor.Host.Services
                 {
                     while (!linkedCts.Token.IsCancellationRequested)
                     {
-                        try
-                        {
-                            await ScanAndEnqueueAsync(linkedCts.Token);
-                        }
-                        catch (OperationCanceledException) { break; }
-                        catch (Exception ex) { _logger.LogError(ex, "Error during periodic scan"); }
-
+                        await ScanAndEnqueueAsync(linkedCts.Token);
                         await Task.Delay(TimeSpan.FromSeconds(_options.PollIntervalSeconds), linkedCts.Token);
                     }
                 }
+            }
+            catch (OperationCanceledException)
+            {
             }
             finally
             {
@@ -242,17 +233,16 @@ namespace Oasis.DeedProcessor.Host.Services
                 EnableRaisingEvents = false
             };
 
-            watcher.Created += async (s, e) => await OnFileSystemEventAsync(e.FullPath);
-            watcher.Changed += async (s, e) => await OnFileSystemEventAsync(e.FullPath);
-            watcher.Renamed += async (s, e) => await OnFileSystemEventAsync(e.FullPath);
-            watcher.Error += (s, e) => _logger.LogWarning(e.GetException(), "FileSystemWatcher error");
+            watcher.Created += async (_, e) => await OnFileSystemEventAsync(e.FullPath);
+            watcher.Changed += async (_, e) => await OnFileSystemEventAsync(e.FullPath);
+            watcher.Renamed += async (_, e) => await OnFileSystemEventAsync(e.FullPath);
+            watcher.Error += (_, e) => _logger.LogWarning(e.GetException(), "FileSystemWatcher error");
 
             return watcher;
         }
 
         private Task OnFileSystemEventAsync(string path)
         {
-            // record last seen time - actual enqueuing is done by periodic scan to ensure stability
             _fileLastSeen[path] = DateTime.UtcNow;
             return Task.CompletedTask;
         }
@@ -262,20 +252,9 @@ namespace Oasis.DeedProcessor.Host.Services
             var incoming = new DirectoryInfo(_options.IncomingFolder);
             if (!incoming.Exists) return;
 
-            // List all files directly in the incoming folder (no subfolders)
             var files = incoming.GetFiles().OrderBy(f => f.CreationTimeUtc).ToArray();
-
-            // Map file name -> FileInfo for quick lookup
             var fileMap = files.ToDictionary(f => Path.GetFileName(f.Name), f => f, StringComparer.OrdinalIgnoreCase);
             var processedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            // Documented procedure:
-            // 1. For each file, check for an exact matching counterpart where one filename is the other with a "-1" suffix
-            //    immediately before the extension (e.g., "Invoice.pdf" and "Invoice-1.pdf").
-            // 2. If both exist, treat those two files as a related pair: ensure both are stable, move both to staging, create
-            //    a small job descriptor (.pair.json) referencing the two staged files, and enqueue the descriptor for processing.
-            // 3. If no matching "-1" counterpart exists, treat the file as a standalone document: ensure stability, move to staging
-            //    and enqueue for single-file processing.
 
             foreach (var fi in files)
             {
@@ -288,20 +267,18 @@ namespace Oasis.DeedProcessor.Host.Services
                     var ext = Path.GetExtension(fileName);
                     var baseNoExt = Path.GetFileNameWithoutExtension(fileName);
 
-                    // Determine the expected counterpart name using exact "-1" suffix rule
                     string counterpartName;
                     bool thisIsMinusOne = baseNoExt.EndsWith("-1", StringComparison.Ordinal);
                     if (thisIsMinusOne)
                     {
                         var baseBase = baseNoExt.Substring(0, baseNoExt.Length - 2);
-                        counterpartName = baseBase + ext; // e.g., Invoice-1.pdf -> counterpart Invoice.pdf
+                        counterpartName = baseBase + ext;
                     }
                     else
                     {
-                        counterpartName = baseNoExt + "-1" + ext; // e.g., Invoice.pdf -> counterpart Invoice-1.pdf
+                        counterpartName = baseNoExt + "-1" + ext;
                     }
 
-                    // If counterpart exists and hasn't been processed yet, attempt paired handling
                     if (fileMap.TryGetValue(counterpartName, out var counterpartFile) && !processedFiles.Contains(counterpartFile.FullName))
                     {
                         var now = DateTime.UtcNow;
@@ -317,13 +294,16 @@ namespace Oasis.DeedProcessor.Host.Services
                             continue;
                         }
 
-                        // Move both to staging (atomic rename) and create job descriptor
                         var staging1 = GetUniquePath(Path.Combine(_options.StagingFolder, Path.GetFileName(fi.Name)));
                         var staging2 = GetUniquePath(Path.Combine(_options.StagingFolder, Path.GetFileName(counterpartFile.Name)));
-                        try { File.Move(fi.FullName, staging1); File.Move(counterpartFile.FullName, staging2); }
+
+                        try
+                        {
+                            File.Move(fi.FullName, staging1);
+                            File.Move(counterpartFile.FullName, staging2);
+                        }
                         catch (IOException)
                         {
-                            _logger.LogDebug("File in use or moved by another process: {F1} or {F2}", fi.FullName, counterpartFile.FullName);
                             continue;
                         }
 
@@ -331,27 +311,22 @@ namespace Oasis.DeedProcessor.Host.Services
                         var jobPath = Path.Combine(_options.StagingFolder, GetUniqueFileName(Path.GetFileNameWithoutExtension(fileName), ".pair.json"));
                         File.WriteAllText(jobPath, JsonSerializer.Serialize(jobDescriptor), Encoding.UTF8);
 
-                        // Enqueue descriptor
                         if (_serviceBusClient != null && !string.IsNullOrWhiteSpace(_serviceBusQueueName))
                         {
                             try
                             {
                                 var sender = _serviceBusClient.CreateSender(_serviceBusQueueName);
                                 var msgBody = JsonSerializer.Serialize(new { Path = jobPath });
-                                var msg = new ServiceBusMessage(msgBody) { ContentType = "application/json" };
-                                await sender.SendMessageAsync(msg, ct);
-                                _logger.LogInformation("Sent paired job to ServiceBus: {Job}", jobPath);
+                                await sender.SendMessageAsync(new ServiceBusMessage(msgBody) { ContentType = "application/json" }, ct);
                             }
-                            catch (Exception ex)
+                            catch
                             {
-                                _logger.LogWarning(ex, "Failed to send paired job to ServiceBus, falling back to in-memory channel");
                                 await _channel.Writer.WriteAsync(jobPath, ct);
                             }
                         }
                         else
                         {
                             await _channel.Writer.WriteAsync(jobPath, ct);
-                            _logger.LogInformation("Enqueued paired job (in-memory): {Job}", jobPath);
                         }
 
                         processedFiles.Add(fi.FullName);
@@ -359,7 +334,6 @@ namespace Oasis.DeedProcessor.Host.Services
                         continue;
                     }
 
-                    // Otherwise treat as standalone: ensure stable and move to staging
                     var nowSingle = DateTime.UtcNow;
                     var lastSeenSingle = _fileLastSeen.TryGetValue(fi.FullName, out var tSingle) ? tSingle : fi.LastWriteTimeUtc;
                     var stableSingle = FileMonitorUtils.IsFileStable(fi.FullName, lastSeenSingle, _options.FileStableSeconds);
@@ -369,43 +343,26 @@ namespace Oasis.DeedProcessor.Host.Services
                         continue;
                     }
 
-                    var stagingPath = Path.Combine(_options.StagingFolder, Path.GetFileName(fi.Name));
-                    var uniqueStaging = GetUniquePath(stagingPath);
+                    var uniqueStaging = GetUniquePath(Path.Combine(_options.StagingFolder, Path.GetFileName(fi.Name)));
+                    try { File.Move(fi.FullName, uniqueStaging); }
+                    catch (IOException) { continue; }
 
-                    try
-                    {
-                        File.Move(fi.FullName, uniqueStaging);
-                    }
-                    catch (IOException)
-                    {
-                        _logger.LogDebug("File in use or moved by another process: {File}", fi.FullName);
-                        continue;
-                    }
-
-                    // enqueue single file path
                     if (_serviceBusClient != null && !string.IsNullOrWhiteSpace(_serviceBusQueueName))
                     {
                         try
                         {
                             var sender = _serviceBusClient.CreateSender(_serviceBusQueueName);
                             var msgBody = JsonSerializer.Serialize(new { Path = uniqueStaging });
-                            var msg = new ServiceBusMessage(msgBody)
-                            {
-                                ContentType = "application/json"
-                            };
-                            await sender.SendMessageAsync(msg, ct);
-                            _logger.LogInformation("Sent job to ServiceBus for file: {File}", uniqueStaging);
+                            await sender.SendMessageAsync(new ServiceBusMessage(msgBody) { ContentType = "application/json" }, ct);
                         }
-                        catch (Exception ex)
+                        catch
                         {
-                            _logger.LogWarning(ex, "Failed to send message to ServiceBus, falling back to in-memory channel");
                             await _channel.Writer.WriteAsync(uniqueStaging, ct);
                         }
                     }
                     else
                     {
                         await _channel.Writer.WriteAsync(uniqueStaging, ct);
-                        _logger.LogInformation("Enqueued file for processing (in-memory): {File}", uniqueStaging);
                     }
 
                     processedFiles.Add(fi.FullName);
@@ -417,21 +374,7 @@ namespace Oasis.DeedProcessor.Host.Services
             }
         }
 
-        private static string GetPairKey(string fileName)
-        {
-            // Remove extension
-            var name = Path.GetFileNameWithoutExtension(fileName) ?? string.Empty;
-            // Remove trailing separators and numbers (e.g., doc-1, doc_01, doc1)
-            var m = System.Text.RegularExpressions.Regex.Match(name, "^(.*?)(?:[-_ ]?\\d+)?$");
-            var key = m.Success ? m.Groups[1].Value : name;
-            return key.ToLowerInvariant();
-        }
-
-        private static string GetUniqueFileName(string baseName, string suffix)
-        {
-            var fileName = baseName + "_" + Guid.NewGuid().ToString("N") + suffix;
-            return fileName;
-        }
+        private static string GetUniqueFileName(string baseName, string suffix) => baseName + "_" + Guid.NewGuid().ToString("N") + suffix;
 
         private static string GetUniquePath(string path)
         {
@@ -455,18 +398,9 @@ namespace Oasis.DeedProcessor.Host.Services
                 await _workerSemaphore.WaitAsync(ct);
                 _ = Task.Run(async () =>
                 {
-                    try
-                    {
-                        await ProcessFileAsync(stagingPath, ct);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Unhandled error processing file {File}", stagingPath);
-                    }
-                    finally
-                    {
-                        _workerSemaphore.Release();
-                    }
+                    try { await ProcessFileAsync(stagingPath, ct); }
+                    catch (Exception ex) { _logger.LogError(ex, "Unhandled error processing file {File}", stagingPath); }
+                    finally { _workerSemaphore.Release(); }
                 }, ct);
             }
         }
@@ -475,17 +409,16 @@ namespace Oasis.DeedProcessor.Host.Services
         {
             var fileName = Path.GetFileName(stagingPath);
             var processingPath = Path.Combine(_options.ProcessingFolder, fileName);
+
             try
             {
-                // move to processing
                 var uniqueProcessing = GetUniquePath(processingPath);
                 File.Move(stagingPath, uniqueProcessing);
                 processingPath = uniqueProcessing;
 
-                // If this is a pair job descriptor (.pair.json), read the two file paths and process them together
                 if (processingPath.EndsWith(".pair.json", StringComparison.OrdinalIgnoreCase))
                 {
-                    string jobTxt = File.ReadAllText(processingPath);
+                    var jobTxt = File.ReadAllText(processingPath);
                     try
                     {
                         var job = JsonSerializer.Deserialize<JsonElement>(jobTxt);
@@ -495,11 +428,9 @@ namespace Oasis.DeedProcessor.Host.Services
                             var path2 = filesElem[1].GetString();
                             if (string.IsNullOrWhiteSpace(path1) || string.IsNullOrWhiteSpace(path2)) throw new Exception("Invalid pair job descriptor");
 
-                            // Move the descriptor out of the way after reading
                             var descriptorDest = Path.Combine(_options.ProcessedFolder, Path.GetFileName(processingPath));
                             File.Move(processingPath, GetUniquePath(descriptorDest));
 
-                            // Process both files (they are currently in staging folder)
                             await ProcessPairFilesAsync(path1, path2, ct);
                             return;
                         }
@@ -512,29 +443,24 @@ namespace Oasis.DeedProcessor.Host.Services
                     }
                 }
 
-                // compute hash for idempotency
                 var hash = await FileMonitorUtils.ComputeFileHashAsync(processingPath);
                 if (_processedHashes.Contains(hash))
                 {
-                    _logger.LogInformation("File already processed (hash match). Moving to processed: {File}", processingPath);
                     MoveFileSafe(processingPath, _options.ProcessedFolder);
                     return;
                 }
 
-                // attempt OCR with retries
                 int attempt = 0;
-                Exception lastEx = null;
+                Exception? lastEx = null;
+
                 while (attempt <= _options.MaxRetries)
                 {
                     attempt++;
                     try
                     {
-                        _logger.LogInformation("Processing {File} (attempt {Attempt})", processingPath, attempt);
                         var ocrResult = await _ocrService.ExtractTextFromFileAsync(processingPath, cacheKey: null);
-
                         if (ocrResult != null && ocrResult.Success)
                         {
-                            // write JSON output next to file in processed folder
                             var cleaned = new Dictionary<string, object>
                             {
                                 { "ImageUrl", ocrResult.ImageUrl },
@@ -546,45 +472,35 @@ namespace Oasis.DeedProcessor.Host.Services
                             };
 
                             var json = JsonSerializer.Serialize(cleaned, new JsonSerializerOptions { WriteIndented = true });
-
                             var outputName = Path.GetFileNameWithoutExtension(processingPath) + ".json";
                             var outPath = Path.Combine(_options.ProcessedFolder, outputName);
-                            File.WriteAllText(outPath, json, System.Text.Encoding.UTF8);
+                            File.WriteAllText(outPath, json, Encoding.UTF8);
 
-                            // record processed hash
                             _processedHashes.Add(hash);
                             SaveProcessedIndex();
 
-                            // move original file to processed (archive)
                             MoveFileSafe(processingPath, _options.ProcessedFolder);
 
-                            _logger.LogInformation("Successfully processed {File}. Output: {Out}", processingPath, outPath);
-
-                            // Invoke LLM processing after successful OCR
                             try
                             {
-                                await AzureLLMService.InvokeAfterOcrAsync(_memoryCache);
+                                if (_llmService != null)
+                                    await _llmService.InvokeAfterOcrAsync(ct);
                             }
                             catch (Exception ex)
                             {
-                                _logger.LogWarning(ex, "AzureLLMService invocation failed after OCR for file {File}", processingPath);
+                                _logger.LogWarning(ex, "LLM service invocation failed after OCR for file {File}", processingPath);
                             }
 
                             return;
                         }
-                        else
-                        {
-                            lastEx = new Exception(ocrResult?.ErrorMessage ?? "OCR returned unsuccessful result");
-                            _logger.LogWarning(lastEx, "OCR returned unsuccessful result for {File}", processingPath);
-                        }
+
+                        lastEx = new Exception(ocrResult?.ErrorMessage ?? "OCR returned unsuccessful result");
                     }
                     catch (Exception ex)
                     {
                         lastEx = ex;
-                        _logger.LogWarning(ex, "Attempt {Attempt} failed for {File}", attempt, processingPath);
                     }
 
-                    // backoff
                     if (attempt <= _options.MaxRetries)
                     {
                         var delay = _options.RetryBaseDelayMs * (int)Math.Pow(2, attempt - 1);
@@ -592,7 +508,6 @@ namespace Oasis.DeedProcessor.Host.Services
                     }
                 }
 
-                // if we get here, all attempts failed
                 _logger.LogError(lastEx, "All attempts failed for {File}. Moving to failed folder.", processingPath);
                 MoveFileSafe(processingPath, _options.FailedFolder);
             }
@@ -607,46 +522,43 @@ namespace Oasis.DeedProcessor.Host.Services
         {
             try
             {
-                // Ensure files exist
                 if (!File.Exists(path1) || !File.Exists(path2))
                 {
-                    _logger.LogError("Paired files not found: {P1}, {P2}", path1, path2);
                     try { MoveFileSafe(path1, _options.FailedFolder); } catch { }
                     try { MoveFileSafe(path2, _options.FailedFolder); } catch { }
                     return;
                 }
 
-                // Compute combined hash for idempotency
                 var h1 = await FileMonitorUtils.ComputeFileHashAsync(path1);
                 var h2 = await FileMonitorUtils.ComputeFileHashAsync(path2);
                 var combinedHash = Convert.ToHexString(System.Security.Cryptography.SHA256.Create().ComputeHash(Encoding.UTF8.GetBytes(h1 + h2)));
+
                 if (_processedHashes.Contains(combinedHash))
                 {
-                    _logger.LogInformation("Paired files already processed (hash match). Moving to processed: {P1}, {P2}", path1, path2);
                     MoveFileSafe(path1, _options.ProcessedFolder);
                     MoveFileSafe(path2, _options.ProcessedFolder);
                     return;
                 }
 
-                // OCR both files
                 var res1 = await _ocrService.ExtractTextFromFileAsync(path1, cacheKey: null);
                 var res2 = await _ocrService.ExtractTextFromFileAsync(path2, cacheKey: null);
 
                 if ((res1 == null || !res1.Success) && (res2 == null || !res2.Success))
                 {
-                    _logger.LogError("Both OCR attempts failed for paired files: {P1}, {P2}", path1, path2);
                     MoveFileSafe(path1, _options.FailedFolder);
                     MoveFileSafe(path2, _options.FailedFolder);
                     return;
                 }
 
-                // Merge results
                 var merged = new Dictionary<string, object>
                 {
-                    { "Files", new[] {
-                        new { File = Path.GetFileName(path1), Engine = res1?.Engine, PlainText = res1?.PlainText, Markdown = res1?.Markdown, ProcessingTimeSeconds = res1?.ProcessingTime.TotalSeconds, Metadata = res1?.Metadata },
-                        new { File = Path.GetFileName(path2), Engine = res2?.Engine, PlainText = res2?.PlainText, Markdown = res2?.Markdown, ProcessingTimeSeconds = res2?.ProcessingTime.TotalSeconds, Metadata = res2?.Metadata }
-                    } },
+                    {
+                        "Files", new[]
+                        {
+                            new { File = Path.GetFileName(path1), Engine = res1?.Engine, PlainText = res1?.PlainText, Markdown = res1?.Markdown, ProcessingTimeSeconds = res1?.ProcessingTime.TotalSeconds, Metadata = res1?.Metadata },
+                            new { File = Path.GetFileName(path2), Engine = res2?.Engine, PlainText = res2?.PlainText, Markdown = res2?.Markdown, ProcessingTimeSeconds = res2?.ProcessingTime.TotalSeconds, Metadata = res2?.Metadata }
+                        }
+                    },
                     { "MergedPlainText", string.Join("\n\n---\n\n", new[] { res1?.PlainText ?? string.Empty, res2?.PlainText ?? string.Empty }) },
                     { "MergedMarkdown", string.Join("\n\n---\n\n", new[] { res1?.Markdown ?? string.Empty, res2?.Markdown ?? string.Empty }) },
                     { "MergedEngines", new[] { res1?.Engine, res2?.Engine } }
@@ -654,30 +566,25 @@ namespace Oasis.DeedProcessor.Host.Services
 
                 var json = JsonSerializer.Serialize(merged, new JsonSerializerOptions { WriteIndented = true });
 
-                // Save merged output
                 var baseName = Path.GetFileNameWithoutExtension(path1) + "__" + Path.GetFileNameWithoutExtension(path2);
                 var outPath = Path.Combine(_options.ProcessedFolder, baseName + ".merged.json");
                 File.WriteAllText(outPath, json, Encoding.UTF8);
 
-                // record processed hash
                 _processedHashes.Add(combinedHash);
                 SaveProcessedIndex();
 
-                // move originals to processed
                 MoveFileSafe(path1, _options.ProcessedFolder);
                 MoveFileSafe(path2, _options.ProcessedFolder);
 
-                _logger.LogInformation("Successfully processed paired files. Output: {Out}", outPath);
-
                 try
                 {
-                    // Put merged content into memory cache for downstream LLM invocation
                     _memoryCache.Set("last_merged_output", json, new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(24) });
-                    await AzureLLMService.InvokeAfterOcrAsync(_memoryCache);
+                    if (_llmService != null)
+                        await _llmService.InvokeAfterOcrAsync(ct);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogWarning(ex, "AzureLLMService invocation failed after paired OCR");
+                    _logger.LogWarning(ex, "LLM service invocation failed after paired OCR");
                 }
             }
             catch (Exception ex)
@@ -705,9 +612,7 @@ namespace Oasis.DeedProcessor.Host.Services
 
         public override async Task StopAsync(CancellationToken cancellationToken)
         {
-            _logger.LogInformation("FileMonitorBackgroundService stopping");
             _internalCts.Cancel();
-            // let base stop
             await base.StopAsync(cancellationToken);
         }
     }
