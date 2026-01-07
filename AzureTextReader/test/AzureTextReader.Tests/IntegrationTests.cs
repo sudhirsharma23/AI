@@ -1,13 +1,16 @@
+#nullable enable
 using System;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using AzureTextReader.Services.Ocr;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Oasis.DeedProcessor.BusinessEntities.Ocr;
+using Oasis.DeedProcessor.Host.Services;
+using Oasis.DeedProcessor.Interface.Ocr;
 using Xunit;
 
 namespace AzureTextReader.Tests
@@ -114,7 +117,7 @@ namespace AzureTextReader.Tests
         {
             public string GetEngineName() => "FakeOCR";
 
-            public Task<OcrResult> ExtractTextAsync(string imageUrl, string cacheKey = null)
+            public Task<OcrResult> ExtractTextAsync(string imageUrl, string? cacheKey = null)
             {
                 return Task.FromResult(new OcrResult
                 {
@@ -127,7 +130,7 @@ namespace AzureTextReader.Tests
                 });
             }
 
-            public Task<OcrResult> ExtractTextFromBytesAsync(byte[] imageBytes, string cacheKey = null)
+            public Task<OcrResult> ExtractTextFromBytesAsync(byte[] imageBytes, string? cacheKey = null)
             {
                 return Task.FromResult(new OcrResult
                 {
@@ -140,7 +143,7 @@ namespace AzureTextReader.Tests
                 });
             }
 
-            public Task<OcrResult> ExtractTextFromFileAsync(string filePath, string cacheKey = null)
+            public Task<OcrResult> ExtractTextFromFileAsync(string filePath, string? cacheKey = null)
             {
                 return Task.FromResult(new OcrResult
                 {

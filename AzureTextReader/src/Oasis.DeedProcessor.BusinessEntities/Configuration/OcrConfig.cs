@@ -1,39 +1,19 @@
 using Microsoft.Extensions.Configuration;
+using System;
+using System.IO;
+using System.Linq;
 
-namespace AzureTextReader.Configuration
+namespace Oasis.DeedProcessor.BusinessEntities.Configuration
 {
-    /// <summary>
-    /// OCR Engine configuration - choose between Azure Document Analyzer or Aspose OCR
-    /// </summary>
     public class OcrConfig
     {
-        /// <summary>
-        /// OCR Engine to use: "Azure" or "Aspose"
-        /// </summary>
         public string Engine { get; set; } = "Azure";
-
-        /// <summary>
-        /// Aspose license file path (relative to application directory)
-        /// </summary>
         public string AsposeLicensePath { get; set; } = "Aspose.Total.NET.lic";
-
-        /// <summary>
-        /// Enable caching for OCR results
-        /// </summary>
         public bool EnableCaching { get; set; } = true;
-
-        /// <summary>
-        /// Cache duration in days for OCR results
-        /// </summary>
         public int CacheDurationDays { get; set; } = 30;
 
-        /// <summary>
-        /// Loads OCR configuration from environment variables or appsettings
-        /// Priority: Environment Variables > User Secrets > appsettings.json
-        /// </summary>
         public static OcrConfig Load()
         {
-            // Try environment variable first
             var engine = Environment.GetEnvironmentVariable("OCR_ENGINE");
 
             if (!string.IsNullOrEmpty(engine))
@@ -48,14 +28,13 @@ namespace AzureTextReader.Configuration
                 };
             }
 
-            // Fall back to configuration file
             var engineFromEnv = Environment.GetEnvironmentVariable("OCR_ENGINE") ?? "default";
             var builder = new ConfigurationBuilder()
-            .SetBasePath(Directory.GetCurrentDirectory())
-            .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
-            .AddJsonFile($"appsettings.{engineFromEnv}.json", optional: true, reloadOnChange: true)
-            .AddUserSecrets<OcrConfig>(optional: true)
-            .AddEnvironmentVariables();
+                .SetBasePath(Directory.GetCurrentDirectory())
+                .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
+                .AddJsonFile($"appsettings.{engineFromEnv}.json", optional: true, reloadOnChange: true)
+                .AddUserSecrets<OcrConfig>(optional: true)
+                .AddEnvironmentVariables();
 
             var configuration = builder.Build();
             var config = configuration.GetSection("Ocr").Get<OcrConfig>() ?? new OcrConfig();
@@ -64,47 +43,29 @@ namespace AzureTextReader.Configuration
             return config;
         }
 
-        /// <summary>
-        /// Validates the OCR configuration
-        /// </summary>
         public void Validate()
         {
             if (string.IsNullOrWhiteSpace(Engine))
-            {
                 throw new ArgumentException("OCR Engine must be specified (Azure or Aspose)");
-            }
 
             var validEngines = new[] { "Azure", "Aspose" };
             if (!validEngines.Contains(Engine, StringComparer.OrdinalIgnoreCase))
-            {
                 throw new ArgumentException($"Invalid OCR Engine '{Engine}'. Must be one of: {string.Join(", ", validEngines)}");
-            }
 
             if (Engine.Equals("Aspose", StringComparison.OrdinalIgnoreCase))
             {
                 if (string.IsNullOrWhiteSpace(AsposeLicensePath))
-                {
                     throw new ArgumentException("Aspose license path is required when using Aspose OCR");
-                }
 
                 var fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, AsposeLicensePath);
                 if (!File.Exists(fullPath))
-                {
                     throw new FileNotFoundException($"Aspose license file not found at: {fullPath}");
-                }
             }
 
             Console.WriteLine($"? OCR Configuration validated: Engine={Engine}");
         }
 
-        /// <summary>
-        /// Check if Azure OCR is enabled
-        /// </summary>
         public bool IsAzureEnabled => Engine.Equals("Azure", StringComparison.OrdinalIgnoreCase);
-
-        /// <summary>
-        /// Check if Aspose OCR is enabled
-        /// </summary>
         public bool IsAsposeEnabled => Engine.Equals("Aspose", StringComparison.OrdinalIgnoreCase);
     }
 }

@@ -6,11 +6,19 @@
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
 		<UserSecretsId>azure-text-reader-secrets</UserSecretsId>
+		<AssemblyName>Oasis.DeedProcessor</AssemblyName>
+		<RootNamespace>Oasis.DeedProcessor</RootNamespace>
 	</PropertyGroup>
 
 	<ItemGroup>
-		<PackageReference Include="Azure.AI.OpenAI" Version="2.1.0" />
-		<PackageReference Include="Aspose.Total" Version="25.10.0" />
+		<!-- Prevent double-compiling library project sources into the executable -->
+		<Compile Remove="Oasis.DeedProcessor.BusinessEntities\**\*.cs" />
+		<Compile Remove="Oasis.DeedProcessor.Interface\**\*.cs" />
+		<Compile Remove="Oasis.DeedProcessor.ServiceAgent\**\*.cs" />
+		<Compile Remove="Oasis.DeedProcessor.ServiceAgent.Azure\**\*.cs" />
+	</ItemGroup>
+
+	<ItemGroup>
 		<PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.0" />
 		<PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="10.0.0" />
 		<PackageReference Include="Microsoft.Extensions.Configuration" Version="10.0.0" />
@@ -23,6 +31,13 @@
 		<PackageReference Include="Microsoft.ApplicationInsights.AspNetCore" Version="2.23.0" />
 		<PackageReference Include="Microsoft.ApplicationInsights.WorkerService" Version="2.23.0" />
 		<PackageReference Include="prometheus-net.AspNetCore" Version="8.2.1" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="Oasis.DeedProcessor.BusinessEntities\Oasis.DeedProcessor.BusinessEntities.csproj" />
+		<ProjectReference Include="Oasis.DeedProcessor.Interface\Oasis.DeedProcessor.Interface.csproj" />
+		<ProjectReference Include="Oasis.DeedProcessor.ServiceAgent\Oasis.DeedProcessor.ServiceAgent.csproj" />
+		<ProjectReference Include="Oasis.DeedProcessor.ServiceAgent.Azure\Oasis.DeedProcessor.ServiceAgent.Azure.csproj" />
 	</ItemGroup>
 
 	<ItemGroup>

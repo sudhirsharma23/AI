@@ -1,7 +1,9 @@
+#nullable enable
 using System;
 using System.IO;
 using System.Text;
 using System.Threading.Tasks;
+using Oasis.DeedProcessor.Host.Services;
 using Xunit;
 
 namespace AzureTextReader.Tests
@@ -22,9 +24,9 @@ namespace AzureTextReader.Tests
         [Fact]
         public async Task ComputeFileHashAsync_ReturnsDifferentHashAfterChange()
         {
-            var h1 = await global::AzureTextReader.Services.Ocr.FileMonitorUtils.ComputeFileHashAsync(_tempFile);
+            var h1 = await FileMonitorUtils.ComputeFileHashAsync(_tempFile);
             File.WriteAllText(_tempFile, "changed");
-            var h2 = await global::AzureTextReader.Services.Ocr.FileMonitorUtils.ComputeFileHashAsync(_tempFile);
+            var h2 = await FileMonitorUtils.ComputeFileHashAsync(_tempFile);
             Assert.NotEqual(h1, h2);
         }
 
@@ -35,14 +37,14 @@ namespace AzureTextReader.Tests
             // set the file LastWrite to older than threshold to simulate stability
             File.SetLastWriteTimeUtc(_tempFile, now.AddSeconds(-10));
             // Use lastSeen older than stable seconds
-            var stable = global::AzureTextReader.Services.Ocr.FileMonitorUtils.IsFileStable(_tempFile, now.AddSeconds(-10),3);
+            var stable = FileMonitorUtils.IsFileStable(_tempFile, now.AddSeconds(-10), 3);
             Assert.True(stable);
         }
 
         [Fact]
         public void LoadProcessedHashes_ReturnsEmptyForMissing()
         {
-            var set = global::AzureTextReader.Services.Ocr.FileMonitorUtils.LoadProcessedHashes(_stateDir);
+            var set = FileMonitorUtils.LoadProcessedHashes(_stateDir);
             Assert.NotNull(set);
         }
 

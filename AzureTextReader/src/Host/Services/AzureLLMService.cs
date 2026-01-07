@@ -1,21 +1,22 @@
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
+using System;
 using System.Collections;
+using System.Collections.Generic;
+using System.IO;
 using System.Linq;
-using System.Net;
-using System.Reflection.PortableExecutable;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Reflection;
-using System.IO;
-using AzureTextReader.Configuration;
-using AzureTextReader.Models;
-using AzureTextReader.Services.Ocr;
 using System.Text.RegularExpressions;
+using Oasis.DeedProcessor.BusinessEntities.Configuration;
+using Oasis.DeedProcessor.BusinessEntities.Models;
+using Oasis.DeedProcessor.BusinessEntities.Ocr;
+using Oasis.DeedProcessor.ServiceAgent.Azure.OpenAI;
+using Oasis.DeedProcessor.ServiceAgent.Prompts;
 
-namespace AzureTextReader.Services
+namespace Oasis.DeedProcessor.Host.Services
 {
     internal static class AzureLLMService
     {
@@ -153,7 +154,7 @@ namespace AzureTextReader.Services
             Console.WriteLine($"Looking for OCR output JSON files in folder: {processedFolder}");
 
             // Step 1: Read all processed JSON files and build combined markdown
-            var allOcrResults = new List<Ocr.OcrResult>();
+            var allOcrResults = new List<OcrResult>();
             var combinedMarkdown = new StringBuilder();
 
             if (Directory.Exists(processedFolder))
@@ -320,7 +321,7 @@ namespace AzureTextReader.Services
                         }
 
                         // Add to results and combined markdown
-                        allOcrResults.Add(new Ocr.OcrResult
+                        allOcrResults.Add(new OcrResult
                         {
                             ImageUrl = imageUrl,
                             Markdown = resolvedMarkdown
@@ -1518,34 +1519,6 @@ namespace AzureTextReader.Services
             s = Regex.Replace(s, @"\[(.*?)\]\((.*?)\)", "$1");
             return s;
         }
-    }
-
-    // Helper class to store OCR results
-    class OcrResult
-    {
-        public string ImageUrl { get; set; }
-        public string Markdown { get; set; }
-    }
-
-    // Model for the extraction operation response
-    class ExtractionOperation
-    {
-        public string? id { get; set; }
-        public string? status { get; set; }
-        public ExtractionResult? result { get; set; }
-    }
-
-    // Model for the result property in the extraction operation
-    class ExtractionResult
-    {
-        public List<ContentResult>? contents { get; set; }
-    }
-
-    // Model for each content item in the extraction result
-    class ContentResult
-    {
-        public string? markdown { get; set; }
-        public string? kind { get; set; }
     }
 }
 

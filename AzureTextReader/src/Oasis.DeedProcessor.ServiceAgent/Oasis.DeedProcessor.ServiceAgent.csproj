@@ -1,0 +1,19 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspose.Total" Version="25.10.0" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Oasis.DeedProcessor.BusinessEntities\Oasis.DeedProcessor.BusinessEntities.csproj" />
+    <ProjectReference Include="..\Oasis.DeedProcessor.Interface\Oasis.DeedProcessor.Interface.csproj" />
+  </ItemGroup>
+
+</Project>

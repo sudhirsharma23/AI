@@ -3,15 +3,15 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
-using AzureTextReader.Configuration;
+using Azure.Messaging.ServiceBus;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Azure.Messaging.ServiceBus;
-using Microsoft.Extensions.Caching.Memory;
-using AzureTextReader.Services; // for AzureLLMService
+using Oasis.DeedProcessor.BusinessEntities.Configuration;
+using Oasis.DeedProcessor.Interface.Ocr;
 
-namespace AzureTextReader.Services.Ocr
+namespace Oasis.DeedProcessor.Host.Services
 {
     /// <summary>
     /// Options for file monitor service - bound from configuration
@@ -65,7 +65,7 @@ namespace AzureTextReader.Services.Ocr
             // ServiceBus client optional
             try
             {
-                var cfg = sp.GetService(typeof(Azure.Messaging.ServiceBus.ServiceBusClient)) as ServiceBusClient;
+                var cfg = sp.GetService(typeof(ServiceBusClient)) as ServiceBusClient;
                 if (cfg != null)
                 {
                     _serviceBusClient = cfg;

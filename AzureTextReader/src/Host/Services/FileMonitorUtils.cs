@@ -1,7 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 
-namespace AzureTextReader.Services.Ocr
+namespace Oasis.DeedProcessor.Host.Services
 {
     public static class FileMonitorUtils
     {
