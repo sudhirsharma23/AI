@@ -13,8 +13,9 @@ using Oasis.DeedProcessor.BusinessEntities.Ocr;
 using Oasis.DeedProcessor.Host.Services;
 using Oasis.DeedProcessor.Interface.Ocr;
 using Xunit;
+using static Xunit.Assert;
 
-namespace AzureTextReader.Tests
+namespace Oasis.DeedProcessor.Tests
 {
     public class IntegrationTests : IDisposable
     {
@@ -57,7 +58,7 @@ namespace AzureTextReader.Tests
             Directory.CreateDirectory(options.StateFolder);
 
             // Host with the FileMonitorBackgroundService, but using a fake IOcrService
-            _host = Host.CreateDefaultBuilder()
+            _host = Microsoft.Extensions.Hosting.Host.CreateDefaultBuilder()
             .ConfigureLogging(logging => logging.SetMinimumLevel(LogLevel.Warning))
             .ConfigureServices((ctx, services) =>
             {
@@ -78,7 +79,7 @@ namespace AzureTextReader.Tests
 
                 // Wait for processed JSON to appear
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                string foundJson = null;
+                string? foundJson = null;
                 while (sw.Elapsed < TimeSpan.FromSeconds(20))
                 {
                     var jsonFiles = Directory.GetFiles(_processed, "*.json", SearchOption.TopDirectoryOnly);

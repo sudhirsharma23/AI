@@ -9,7 +9,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Oasis.DeedProcessor.BusinessEntities\Oasis.DeedProcessor.BusinessEntities.csproj" />
     <ProjectReference Include="..\Oasis.DeedProcessor.Interface\Oasis.DeedProcessor.Interface.csproj" />
-    <ProjectReference Include="..\Oasis.DeedProcessor.ServiceAgent\Oasis.DeedProcessor.ServiceAgent.csproj" />
+    <ProjectReference Include="..\Oasis.DeedProcessor.ServiceAgent\Oasis.DeedProcessor.ServiceAgent.Aspose.csproj" />
     <ProjectReference Include="..\Oasis.DeedProcessor.ServiceAgent.Azure\Oasis.DeedProcessor.ServiceAgent.Azure.csproj" />
   </ItemGroup>
 

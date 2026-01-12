@@ -5,8 +5,9 @@ using System.Text;
 using System.Threading.Tasks;
 using Oasis.DeedProcessor.Host.Services;
 using Xunit;
+using static Xunit.Assert;
 
-namespace AzureTextReader.Tests
+namespace Oasis.DeedProcessor.Tests
 {
     public class FileMonitorUtilsTests : IDisposable
     {
