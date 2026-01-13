@@ -1,10 +1,10 @@
 {
   "AzureAI": {
-    "Endpoint": "YOUR_AZURE_ENDPOINT",
-    "SubscriptionKey": "YOUR_AZURE_KEY_HERE"
+    "Endpoint": "https://your-endpoint.azure.com/",
+    "SubscriptionKey": "<REPLACE_WITH_KEY>"
   },
   "Redis": {
-    "ConnectionString": "YOUR_REDIS_CONNECTION_HERE"
+    "ConnectionString": "<REPLACE_WITH_CONNECTION_STRING>"
   },
   "Ocr": {
     "Engine": "Aspose",

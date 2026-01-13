@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Simple pre-push hook to scan staged files for common secret patterns
+set -e
+
+echo "Scanning for secrets before push..."
+
+# Patterns: api keys, subscription keys, connection strings, private keys
+PATTERNS=("SubscriptionKey" "Endpoint" "ConnectionString" "PASSWORD" "password" "PRIVATE_KEY" "AsposeLicensePath" "-----BEGIN PRIVATE KEY-----")
+
+staged_files=$(git diff --cached --name-only --diff-filter=ACM)
+if [ -z "$staged_files" ]; then
+  echo "No staged files to check."
+  exit 0
+fi
+
+found=0
+for file in $staged_files; do
+  # only check text files
+  if file "$file" | grep -q text; then
+    for p in "${PATTERNS[@]}"; do
+      if git show :"$file" | grep -n --color=never -E "$p" >/dev/null 2>&1; then
+        echo "Potential secret found in $file matching pattern: $p"
+        found=1
+      fi
+    done
+  fi
+done
+
+if [ "$found" -ne 0 ]; then
+  echo "Push aborted. Remove secrets from staged files or move them to environment variables/appsettings.json local files." >&2
+  exit 1
+fi
+
+echo "No obvious secrets found. Proceeding with push."
+exit 0
