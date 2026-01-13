@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900">
+  <style>
+    .box { fill: #ffffff; stroke: #2b6cb0; stroke-width:2; rx:8; }
+    .title { font: bold 18px Arial, Helvetica, sans-serif; fill: #2b6cb0; }
+    .label { font: 14px Arial, Helvetica, sans-serif; fill: #111827; }
+    .note { font: 12px Arial, Helvetica, sans-serif; fill: #475569; }
+    .arrow { stroke: #2d3748; stroke-width:2; fill: none; marker-end: url(#arrowhead); }
+    .cloud { fill: #edf2ff; stroke: #c7d2fe; stroke-width:1.5; rx:10; }
+  </style>
+
+  <defs>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#2d3748"/>
+    </marker>
+  </defs>
+
+  <!-- Header -->
+  <text x="40" y="36" class="title">Oasis.DeedProcessor - System Flow</text>
+  <text x="40" y="60" class="note">Step-by-step processing pipeline for incoming files (OCR, validation, caching, output)</text>
+
+  <!-- Left: File System -->
+  <rect x="40" y="100" width="220" height="80" class="box" />
+  <text x="150" y="130" text-anchor="middle" class="label">Incoming Folder</text>
+  <text x="150" y="150" text-anchor="middle" class="note">(watch / poll)</text>
+
+  <!-- File Monitor -->
+  <rect x="320" y="90" width="240" height="110" class="box" />
+  <text x="440" y="120" text-anchor="middle" class="label">File Monitor</text>
+  <text x="440" y="140" text-anchor="middle" class="note">staging, stability, retries</text>
+
+  <!-- Processing Workers -->
+  <rect x="600" y="80" width="260" height="120" class="box" />
+  <text x="730" y="110" text-anchor="middle" class="label">Processing Worker(s)</text>
+  <text x="730" y="130" text-anchor="middle" class="note">concurrency, retries, state</text>
+
+  <!-- OCR Engines group -->
+  <rect x="320" y="230" width="540" height="120" class="cloud" />
+  <text x="590" y="255" text-anchor="middle" class="label">OCR Engines</text>
+  <text x="590" y="275" text-anchor="middle" class="note">Aspose (local) | Azure OCR (cloud)</text>
+
+  <!-- Schema Validator -->
+  <rect x="320" y="380" width="240" height="90" class="box" />
+  <text x="440" y="415" text-anchor="middle" class="label">Schema Validator / Parser</text>
+
+  <!-- Business Entities -->
+  <rect x="600" y="380" width="260" height="90" class="box" />
+  <text x="730" y="415" text-anchor="middle" class="label">Business Entities</text>
+  <text x="730" y="435" text-anchor="middle" class="note">domain models (invoices / deeds)</text>
+
+  <!-- Cache -->
+  <rect x="320" y="510" width="240" height="70" class="box" />
+  <text x="440" y="540" text-anchor="middle" class="label">Cache</text>
+  <text x="440" y="558" text-anchor="middle" class="note">Memory / Redis (dedupe)</text>
+
+  <!-- Service Bus / Output -->
+  <rect x="600" y="510" width="260" height="70" class="box" />
+  <text x="730" y="540" text-anchor="middle" class="label">Output / Integration</text>
+  <text x="730" y="558" text-anchor="middle" class="note">Azure Service Bus / downstream</text>
+
+  <!-- Persistence: processed/failed folders -->
+  <rect x="920" y="100" width="240" height="120" class="box" />
+  <text x="1040" y="130" text-anchor="middle" class="label">Processed / Failed</text>
+  <text x="1040" y="150" text-anchor="middle" class="note">Storage for files and state</text>
+
+  <!-- Telemetry -->
+  <rect x="920" y="260" width="240" height="80" class="box" />
+  <text x="1040" y="295" text-anchor="middle" class="label">Telemetry</text>
+  <text x="1040" y="315" text-anchor="middle" class="note">AppInsights / Prometheus</text>
+
+  <!-- Arrows (aligned to rectangle edges/centers) -->
+  <!-- Incoming -> File Monitor: from right-center of Incoming (260,140) to left-center of File Monitor (320,145) -->
+  <path d="M260 140 L320 145" class="arrow" />
+
+  <!-- File Monitor -> Processing Worker: from right-center of File Monitor (560,145) to left-center of Worker (600,140) -->
+  <path d="M560 145 L600 140" class="arrow" />
+
+  <!-- Processing Worker -> OCR Engines: from bottom-center of Worker (730,200) to top-center of OCR (590,230) -->
+  <path d="M700 200 L590 230" class="arrow" />
+
+  <!-- OCR Engines -> Schema Validator: from bottom-center of OCR (590,350) to top-center of Schema Validator (440,380) -->
+  <path d="M590 350 L440 380" class="arrow" />
+
+  <!-- OCR Engines -> Business Entities: from bottom-center of OCR (590,350) to top-center of Business Entities (730,380) -->
+  <path d="M590 350 L730 380" class="arrow" />
+
+  <!-- Schema Validator -> Cache: from bottom-center of Schema Validator (440,470) to top-center of Cache (440,510) -->
+  <path d="M440 470 L440 510" class="arrow" />
+
+  <!-- Business Entities -> Output / Integration: from bottom-center of Business Entities (730,470) to top-center of Output (730,510) -->
+  <path d="M730 470 L730 510" class="arrow" />
+
+  <!-- Output -> Processed/Failed: from right-center of Output (860,545) to left-center of Processed/Failed (920,160) -->
+  <path d="M860 545 L920 160" class="arrow" />
+
+  <!-- Output -> Telemetry: from right-center of Output (860,545) to left-center of Telemetry (920,300) -->
+  <path d="M860 545 L920 300" class="arrow" />
+
+  <!-- Labels for flow steps (numbered) -->
+  <text x="30" y="220" class="note">1) File arrival: drop into Incoming Folder</text>
+  <text x="30" y="240" class="note">2) File Monitor detects stable file and moves to staging</text>
+  <text x="30" y="260" class="note">3) Worker picks file; concurrency and retries applied</text>
+  <text x="30" y="280" class="note">4) OCR extraction via Aspose or Azure</text>
+  <text x="30" y="300" class="note">5) Schema validation and mapping to domain entities</text>
+  <text x="30" y="320" class="note">6) Cache results; prevent duplicate processing</text>
+  <text x="30" y="340" class="note">7) Publish to Service Bus / write processed files</text>
+  <text x="30" y="360" class="note">8) Record telemetry and metrics; handle failures</text>
+
+  <!-- Footer: config sources -->
+  <rect x="40" y="660" width="1120" height="70" class="box" />
+  <text x="60" y="685" class="label">Configuration and Secrets</text>
+  <text x="60" y="705" class="note">appsettings.json | UserSecrets | Environment Variables</text>
+</svg>

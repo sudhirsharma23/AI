@@ -48,6 +48,17 @@
 		<None Remove="Oasis.DeedProcessor.Interface\**" />
 		<None Remove="Oasis.DeedProcessor.ServiceAgent.Azure\**" />
 		<None Remove="Oasis.DeedProcessor.ServiceAgent\**" />
+
+		<!-- Exclude tools and other non-app source folders to avoid pulling other projects' generated files -->
+		<Compile Remove="tools\**\*.cs" />
+		<None Remove="tools\**\*" />
+		<Content Remove="tools\**\*" />
+		<EmbeddedResource Remove="tools\**\*" />
+
+		<!-- Exclude obj/bin folders under src to avoid generated assembly attribute collisions -->
+		<Compile Remove="obj\**\*.cs" />
+		<None Remove="obj\**\*" />
+		<Content Remove="obj\**\*" />
 	</ItemGroup>
 
 	<ItemGroup>
