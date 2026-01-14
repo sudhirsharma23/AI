@@ -1,0 +1,209 @@
+{
+  "info": {
+    "name": "RealEstate.AI API - Samples",
+    "description": "Sample requests for CSV/XLSX ingestion, valuation and risk endpoints.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "version": "1.0.0"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5000",
+      "type": "string"
+    },
+    {
+      "key": "externalUrl",
+      "value": "https://example.com/properties.json",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Root - Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            ""
+          ]
+        }
+      }
+    },
+    {
+      "name": "Ingest - All Registered Sources",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/properties/ingest",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "properties",
+            "ingest"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Ingest - Upload CSV",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "file",
+              "type": "file",
+              "src": "samples/sample_properties.csv",
+              "description": "Local path to sample CSV included in repo: samples/sample_properties.csv"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/properties/ingest/upload",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "properties",
+            "ingest",
+            "upload"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Ingest - Upload XLSX",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "file",
+              "type": "file",
+              "src": "samples/props.xlsx",
+              "description": "Create or point to a local XLSX file (props.xlsx) to upload"
+            }
+          ]
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/properties/ingest/upload",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "properties",
+            "ingest",
+            "upload"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Ingest - External Connector (by query)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/properties/ingest/external?connectorUrl={{externalUrl}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "properties",
+            "ingest",
+            "external"
+          ],
+          "query": [
+            {
+              "key": "connectorUrl",
+              "value": "{{externalUrl}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Valuation - Estimate (inline property)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"property\": {\n    \"address\": \"55 Example Ln\",\n    \"yearBuilt\": 2010,\n    \"areaSqFt\": 1500.0,\n    \"bedrooms\": 3,\n    \"bathrooms\": 2,\n    \"listedPrice\": 320000,\n    \"description\": \"Nice neighborhood\"\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/valuation/estimate",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "valuation",
+            "estimate"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Valuation - Rank",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/valuation/rank",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "valuation",
+            "rank"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Risk - Assess",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/risk/assess",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "risk",
+            "assess"
+          ]
+        }
+      }
+    }
+  ]
+}

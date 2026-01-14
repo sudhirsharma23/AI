@@ -1,0 +1,6 @@
+address,areaSqFt,yearBuilt,bedrooms,bathrooms,listedPrice,description
+10 Test St,1200,1999,3,2,250000,Good home with updates
+20 Oak Ave,1800,2005,4,3,375000,Spacious and bright
+30 Pine Rd,900,1970,2,1,95000,Fixer-upper as-is
+BadRow
+,1500,2010,3,2,300000,Missing address

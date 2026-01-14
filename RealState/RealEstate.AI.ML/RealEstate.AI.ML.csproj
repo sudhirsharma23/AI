@@ -1,0 +1,14 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\RealEstate.AI.Core\RealEstate.AI.Core.csproj" />
+    <ProjectReference Include="..\RealEstate.AI.Infrastructure\RealEstate.AI.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>

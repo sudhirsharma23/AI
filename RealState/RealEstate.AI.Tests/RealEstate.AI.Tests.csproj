@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.4.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.4.5" />
+    <PackageReference Include="Moq" Version="4.18.4" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\RealEstate.AI.Core\RealEstate.AI.Core.csproj" />
+    <ProjectReference Include="..\RealEstate.AI.Infrastructure\RealEstate.AI.Infrastructure.csproj" />
+    <ProjectReference Include="..\RealEstate.AI.ML\RealEstate.AI.ML.csproj" />
+    <ProjectReference Include="..\RealEstate.AI.WebApi\RealEstate.AI.WebApi.csproj" />
+  </ItemGroup>
+</Project>
