@@ -1,0 +1,49 @@
+### Health
+GET http://localhost:5000/
+
+### Ingest all registered sources
+POST http://localhost:5000/api/properties/ingest
+
+### Upload CSV file (multipart)
+POST http://localhost:5000/api/properties/ingest/upload
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary
+
+--XXXX
+Content-Disposition: form-data; name="file"; filename="sample_properties.csv"
+Content-Type: text/csv
+
+< ./samples/sample_properties.csv
+--XXXX--
+
+### Upload XLSX file (multipart)
+POST http://localhost:5000/api/properties/ingest/upload
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary
+
+--XXXX
+Content-Disposition: form-data; name="file"; filename="props.xlsx"
+Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+
+< ./samples/props.xlsx
+--XXXX--
+
+### Valuation estimate (inline property)
+POST http://localhost:5000/api/valuation/estimate
+Content-Type: application/json
+
+{
+  "property": {
+    "address": "55 Example Ln",
+    "yearBuilt": 2010,
+    "areaSqFt": 1500.0,
+    "bedrooms": 3,
+    "bathrooms": 2,
+    "listedPrice": 320000,
+    "description": "Nice neighborhood"
+  }
+}
+
+### Rank
+POST http://localhost:5000/api/valuation/rank
+
+### Risk assess
+POST http://localhost:5000/api/risk/assess

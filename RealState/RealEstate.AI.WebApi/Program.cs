@@ -9,6 +9,7 @@ using RealEstate.AI.Infrastructure.Services;
 using RealEstate.AI.ML.Services;
 using RealEstate.AI.ML.Valuation;
 using RealEstate.AI.WebApi.DTOs;
+using RealEstate.AI.WebApi.Swagger;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -34,7 +35,18 @@ builder.Services.AddScoped<IIncomeValuationService, IncomeValuationService>();
 builder.Services.AddScoped<ICostValuationService, CostValuationService>();
 builder.Services.AddScoped<ValuationOrchestrator>();
 
+// Swagger with operation filter for examples
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.OperationFilter<ResponseExamplesOperationFilter>();
+});
+
 var app = builder.Build();
+
+// Expose Swagger UI for local testing
+app.UseSwagger();
+app.UseSwaggerUI();
 
 app.MapGet("/", () => "RealEstate.AI Web API");
 

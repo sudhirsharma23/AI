@@ -1,0 +1,11 @@
+{
+  "name": "realestate-ai-postman-runner",
+  "version": "1.0.0",
+  "description": "Helpers to run the Postman collection locally via Newman",
+  "scripts": {
+    "run:postman": "newman run .postman/RealEstateAI.postman_collection.json --env-var \"baseUrl=http://localhost:5000\""
+  },
+  "devDependencies": {
+    "newman": "^5.3.3"
+  }
+}

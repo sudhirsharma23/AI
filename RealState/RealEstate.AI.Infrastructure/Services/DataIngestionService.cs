@@ -139,13 +139,13 @@ namespace RealEstate.AI.Infrastructure.Services
                                 continue;
                             }
 
-                            if (!dict.TryGetValue("areaSqFt", out var areaStr) || !decimal.TryParse(areaStr, NumberStyles.Number, CultureInfo.InvariantCulture, out var area))
+                            if (!dict.TryGetValue("areasqft", out var areaStr) || !decimal.TryParse(areaStr, NumberStyles.Number, CultureInfo.InvariantCulture, out var area))
                             {
                                 report.Errors.Add($"Row {rowIndex}: invalid areaSqFt");
                                 continue;
                             }
 
-                            if (!dict.TryGetValue("yearBuilt", out var yearStr) || !int.TryParse(yearStr, out var year))
+                            if (!dict.TryGetValue("yearbuilt", out var yearStr) || !int.TryParse(yearStr, out var year))
                             {
                                 report.Errors.Add($"Row {rowIndex}: invalid yearBuilt");
                                 continue;
