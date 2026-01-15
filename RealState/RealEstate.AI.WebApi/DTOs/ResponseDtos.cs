@@ -4,15 +4,24 @@ using RealEstate.AI.Core.Domain;
 
 namespace RealEstate.AI.WebApi.DTOs
 {
+    /// <summary>Represents a property in API responses.</summary>
     public class PropertyDto
     {
+        /// <summary>Unique identifier.</summary>
         public Guid Id { get; set; }
+        /// <summary>Street address.</summary>
         public string Address { get; set; }
+        /// <summary>Year built.</summary>
         public int YearBuilt { get; set; }
+        /// <summary>Area in square feet.</summary>
         public decimal AreaSqFt { get; set; }
+        /// <summary>Bedrooms count.</summary>
         public int Bedrooms { get; set; }
+        /// <summary>Bathrooms count.</summary>
         public int Bathrooms { get; set; }
+        /// <summary>Listed price if present.</summary>
         public decimal? ListedPrice { get; set; }
+        /// <summary>Free-text description.</summary>
         public string Description { get; set; }
 
         public static PropertyDto From(Property p)
@@ -32,6 +41,7 @@ namespace RealEstate.AI.WebApi.DTOs
         }
     }
 
+    /// <summary>Valuation summary DTO used as response for valuation endpoint.</summary>
     public class ValuationSummaryDto
     {
         public Guid PropertyId { get; set; }
@@ -56,6 +66,7 @@ namespace RealEstate.AI.WebApi.DTOs
         }
     }
 
+    /// <summary>Simple valuation result DTO.</summary>
     public class ValuationResultDto
     {
         public decimal EstimatedValue { get; set; }
@@ -74,6 +85,7 @@ namespace RealEstate.AI.WebApi.DTOs
         }
     }
 
+    /// <summary>Risk assessment DTO.</summary>
     public class RiskAssessmentDto
     {
         public Guid PropertyId { get; set; }
@@ -94,6 +106,7 @@ namespace RealEstate.AI.WebApi.DTOs
         }
     }
 
+    /// <summary>Ranked property DTO used by ranking endpoint.</summary>
     public class RankedPropertyDto
     {
         public Guid PropertyId { get; set; }
@@ -112,6 +125,7 @@ namespace RealEstate.AI.WebApi.DTOs
         }
     }
 
+    /// <summary>Response from ingestion endpoints including saved objects and parsing errors.</summary>
     public class IngestResponseDto
     {
         public IList<PropertyDto> Saved { get; set; } = new List<PropertyDto>();

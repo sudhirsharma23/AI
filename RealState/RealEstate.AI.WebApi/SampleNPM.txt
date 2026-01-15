@@ -1,0 +1,9 @@
+Newman (Postman CLI)
+•	Install Node/npm if needed.
+•	Install deps: npm install (in repo root).
+•	Run collection: npm run run:postman (uses .postman/RealEstateAI.postman_collection.json and baseUrl=http://localhost:5000).
+Quick curl examples
+•	Health: curl http://localhost:5000/
+•	Upload CSV: curl -X POST "http://localhost:5000/api/properties/ingest/upload" -F "file=@samples/sample_properties.csv;type=text/csv"
+•	Valuation JSON:
+curl -X POST "http://localhost:5000/api/valuation/estimate" -H "Content-Type: application/json" -d '{"property":{"address":"55 Example Ln","yearBuilt":2010,"areaSqFt":1500,"bedrooms":3,"bathrooms":2,"listedPrice":320000,"description":"Nice neighborhood"}}'

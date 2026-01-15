@@ -10,6 +10,10 @@ using RealEstate.AI.ML.Services;
 using RealEstate.AI.ML.Valuation;
 using RealEstate.AI.WebApi.DTOs;
 using RealEstate.AI.WebApi.Swagger;
+using Microsoft.OpenApi.Models;
+using Swashbuckle.AspNetCore.Filters;
+using System.IO;
+using System.Reflection;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -40,7 +44,36 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
     options.OperationFilter<ResponseExamplesOperationFilter>();
+    options.OperationFilter<CustomSecurityRequirementsOperationFilter>();
+    options.ExampleFilters();
+
+    // Add security definitions
+    options.AddSecurityDefinition("ApiKey", new OpenApiSecurityScheme
+    {
+        Description = "API Key needed to access this endpoint. Enter in header 'X-API-KEY'.",
+        Name = "X-API-KEY",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.ApiKey,
+        Scheme = "ApiKeyScheme"
+    });
+
+    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Description = "JWT Authorization header using the Bearer scheme. Example: 'Bearer {token}'",
+        Name = "Authorization",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT"
+    });
+
+    // Include XML comments
+    var xmlFile = Path.ChangeExtension(Assembly.GetExecutingAssembly().Location, ".xml");
+    if (File.Exists(xmlFile)) options.IncludeXmlComments(xmlFile);
 });
+
+// Register example providers assembly scanning
+builder.Services.AddSwaggerExamplesFromAssemblyOf<Program>();
 
 var app = builder.Build();
 
@@ -48,13 +81,15 @@ var app = builder.Build();
 app.UseSwagger();
 app.UseSwaggerUI();
 
-app.MapGet("/", () => "RealEstate.AI Web API");
+app.MapGet("/", () => "RealEstate.AI Web API")
+    .Produces<string>(200);
 
 app.MapPost("/api/properties/ingest", async (IDataIngestionService ingestion) =>
 {
     var items = await ingestion.IngestAllAsync();
     return Results.Ok(items.Select(RealEstate.AI.WebApi.DTOs.PropertyDto.From));
-});
+})
+.Produces<IEnumerable<RealEstate.AI.WebApi.DTOs.PropertyDto>>(200);
 
 app.MapPost("/api/properties/ingest/upload", async (HttpRequest request, IDataIngestionService ingestion) =>
 {
@@ -68,14 +103,16 @@ app.MapPost("/api/properties/ingest/upload", async (HttpRequest request, IDataIn
     var report = await ingestion.IngestFromFileWithReportAsync(stream, file.ContentType);
     var dto = IngestResponseDto.From(report);
     return Results.Ok(dto);
-});
+})
+.Produces<RealEstate.AI.WebApi.DTOs.IngestResponseDto>(200);
 
 app.MapPost("/api/properties/ingest/external", async (string connectorUrl, IDataIngestionService ingestion) =>
 {
     if (string.IsNullOrWhiteSpace(connectorUrl)) return Results.BadRequest(new { message = "connectorUrl is required" });
     var items = await ingestion.IngestFromExternalAsync(connectorUrl);
     return Results.Ok(items.Select(RealEstate.AI.WebApi.DTOs.PropertyDto.From));
-});
+})
+.Produces<IEnumerable<RealEstate.AI.WebApi.DTOs.PropertyDto>>(200);
 
 app.MapPost("/api/valuation/estimate", async (ValuationRequestDto req, IFeatureEngineeringService fe, IRegressionModelService reg, ValuationOrchestrator orchestrator, IPropertyRepository repo) =>
 {
@@ -112,7 +149,8 @@ app.MapPost("/api/valuation/estimate", async (ValuationRequestDto req, IFeatureE
     var comps = properties.Where(p => p.Id != target.Id).ToList();
     var summary = await orchestrator.OrchestrateAsync(target, features, comps);
     return Results.Ok(ValuationSummaryDto.From(summary));
-});
+})
+.Produces<RealEstate.AI.Core.Domain.ValuationSummary>(200);
 
 app.MapPost("/api/valuation/rank", async (IRankingModelService ranker, IFeatureEngineeringService fe, IPropertyRepository repo) =>
 {
@@ -125,7 +163,8 @@ app.MapPost("/api/valuation/rank", async (IRankingModelService ranker, IFeatureE
 
     var ranked = await ranker.RankPropertiesAsync(vectors, RankingCriterion.ValueForMoney);
     return Results.Ok(ranked.Select(RealEstate.AI.WebApi.DTOs.RankedPropertyDto.From));
-});
+})
+.Produces<IEnumerable<RealEstate.AI.WebApi.DTOs.RankedPropertyDto>>(200);
 
 app.MapPost("/api/risk/assess", async (IRiskDetectionService riskService, IFeatureEngineeringService fe, IPropertyRepository repo) =>
 {
@@ -136,7 +175,8 @@ app.MapPost("/api/risk/assess", async (IRiskDetectionService riskService, IFeatu
     var features = await fe.BuildFeatureVectorAsync(first);
     var risk = await riskService.AssessAsync(first, features);
     return Results.Ok(RiskAssessmentDto.From(risk));
-});
+})
+.Produces<RealEstate.AI.Core.Domain.RiskAssessmentResult>(200);
 
 app.Run();
 
