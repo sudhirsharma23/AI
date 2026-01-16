@@ -1,3 +1,4 @@
+using System;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -14,14 +15,79 @@ using Microsoft.OpenApi.Models;
 using Swashbuckle.AspNetCore.Filters;
 using System.IO;
 using System.Reflection;
+using Polly;
+using Polly.Extensions.Http;
+using System.Net.Http;
+using Microsoft.Extensions.Logging;
+using Polly.Timeout;
+using Polly.Bulkhead;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// obtain a logger for policy callbacks
+using var spForPolicies = builder.Services.BuildServiceProvider();
+var policyLogger = spForPolicies.GetService<ILogger<Program>>() ?? spForPolicies.GetRequiredService<ILoggerFactory>().CreateLogger<Program>();
 
 // Register services
 builder.Services.AddHttpClient();
 // provide named/typed clients for services that accept HttpClient in ctor
-builder.Services.AddHttpClient<ExternalConnectorService>();
-builder.Services.AddHttpClient<AzureNlpService>();
+
+// Resilience policies with logging
+static IAsyncPolicy<HttpResponseMessage> GetRetryPolicy(ILogger logger)
+{
+    var jitterer = new Random();
+    return HttpPolicyExtensions
+        .HandleTransientHttpError()
+        .OrResult(msg => (int)msg.StatusCode == 429)
+        .WaitAndRetryAsync(4, retryAttempt => TimeSpan.FromSeconds(Math.Pow(2, retryAttempt)) + TimeSpan.FromMilliseconds(jitterer.Next(0, 200)),
+            onRetry: (outcome, timespan, retryAttempt, context) =>
+            {
+                try { logger.LogWarning("HTTP retry {Attempt} after {Delay} due to {Reason}", retryAttempt, timespan, outcome?.Exception?.Message ?? outcome?.Result?.StatusCode.ToString()); } catch { }
+            });
+}
+
+static IAsyncPolicy<HttpResponseMessage> GetCircuitBreakerPolicy(ILogger logger)
+{
+    return HttpPolicyExtensions
+        .HandleTransientHttpError()
+        .CircuitBreakerAsync(3, TimeSpan.FromSeconds(30), onBreak: (outcome, ts) =>
+        {
+            try { logger.LogWarning("Circuit breaker opened for {Duration} due to {Reason}", ts, outcome?.Exception?.Message ?? outcome?.Result?.StatusCode.ToString()); } catch { }
+        }, onReset: () =>
+        {
+            try { logger.LogInformation("Circuit breaker reset"); } catch { }
+        });
+}
+
+static IAsyncPolicy<HttpResponseMessage> GetTimeoutPolicy()
+{
+    // 10s timeout for HTTP calls
+    return Policy.TimeoutAsync<HttpResponseMessage>(TimeSpan.FromSeconds(10), TimeoutStrategy.Optimistic);
+}
+
+static IAsyncPolicy<HttpResponseMessage> GetBulkheadPolicy(ILogger logger)
+{
+    // limit concurrent executions and queue a modest number
+    var bulkhead = Policy.BulkheadAsync<HttpResponseMessage>(maxParallelization: 20, maxQueuingActions: 40, onBulkheadRejectedAsync: context =>
+    {
+        try { logger.LogWarning("Bulkhead rejected request - too many concurrent requests"); } catch { }
+        return Task.CompletedTask;
+    });
+
+    return bulkhead;
+}
+
+builder.Services.AddHttpClient<ExternalConnectorService>()
+    .AddPolicyHandler(GetBulkheadPolicy(policyLogger))
+    .AddPolicyHandler(GetTimeoutPolicy())
+    .AddPolicyHandler(GetRetryPolicy(policyLogger))
+    .AddPolicyHandler(GetCircuitBreakerPolicy(policyLogger));
+
+builder.Services.AddHttpClient<AzureNlpService>()
+    .AddPolicyHandler(GetBulkheadPolicy(policyLogger))
+    .AddPolicyHandler(GetTimeoutPolicy())
+    .AddPolicyHandler(GetRetryPolicy(policyLogger))
+    .AddPolicyHandler(GetCircuitBreakerPolicy(policyLogger));
 
 builder.Services.AddSingleton<IPropertyDataSource, SimplePropertyDataSource>();
 builder.Services.AddSingleton<IPropertyRepository, InMemoryPropertyRepository>();

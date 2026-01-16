@@ -1,11 +1,11 @@
 ### Health
-GET http://localhost:5000/
+GET http://localhost:5218
 
 ### Ingest all registered sources
-POST http://localhost:5000/api/properties/ingest
+POST http://localhost:5218/api/properties/ingest
 
 ### Upload CSV file (multipart)
-POST http://localhost:5000/api/properties/ingest/upload
+POST http://localhost:5218/api/properties/ingest/upload
 Content-Type: multipart/form-data; boundary=----WebKitFormBoundary
 
 --XXXX
@@ -16,7 +16,7 @@ Content-Type: text/csv
 --XXXX--
 
 ### Upload XLSX file (multipart)
-POST http://localhost:5000/api/properties/ingest/upload
+POST http://localhost:5218/api/properties/ingest/upload
 Content-Type: multipart/form-data; boundary=----WebKitFormBoundary
 
 --XXXX
@@ -27,7 +27,7 @@ Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
 --XXXX--
 
 ### Valuation estimate (inline property)
-POST http://localhost:5000/api/valuation/estimate
+POST http://localhost:5218/api/valuation/estimate
 Content-Type: application/json
 
 {
@@ -43,7 +43,7 @@ Content-Type: application/json
 }
 
 ### Rank
-POST http://localhost:5000/api/valuation/rank
+POST http://localhost:5218/api/valuation/rank
 
 ### Risk assess
-POST http://localhost:5000/api/risk/assess
+POST http://localhost:5218/api/risk/assess
