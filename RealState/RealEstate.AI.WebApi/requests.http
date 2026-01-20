@@ -1,5 +1,5 @@
 ### Health
-GET http://localhost:5218
+GET http://localhost:5218/
 
 ### Ingest all registered sources
 POST http://localhost:5218/api/properties/ingest

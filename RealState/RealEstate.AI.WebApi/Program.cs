@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -21,19 +22,30 @@ using System.Net.Http;
 using Microsoft.Extensions.Logging;
 using Polly.Timeout;
 using Polly.Bulkhead;
+using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Configure Serilog
+Serilog.Log.Logger = new LoggerConfiguration()
+    .Enrich.FromLogContext()
+    .WriteTo.Console()
+    .WriteTo.File("logs/realestate-ai-.log", rollingInterval: RollingInterval.Day)
+    .CreateLogger();
+
+builder.Host.UseSerilog();
+
 // obtain a logger for policy callbacks
 using var spForPolicies = builder.Services.BuildServiceProvider();
-var policyLogger = spForPolicies.GetService<ILogger<Program>>() ?? spForPolicies.GetRequiredService<ILoggerFactory>().CreateLogger<Program>();
+var loggerFactory = spForPolicies.GetRequiredService<ILoggerFactory>();
+Microsoft.Extensions.Logging.ILogger policyLogger = loggerFactory.CreateLogger(typeof(Program).FullName);
 
 // Register services
 builder.Services.AddHttpClient();
 // provide named/typed clients for services that accept HttpClient in ctor
 
 // Resilience policies with logging
-static IAsyncPolicy<HttpResponseMessage> GetRetryPolicy(ILogger logger)
+static IAsyncPolicy<HttpResponseMessage> GetRetryPolicy(Microsoft.Extensions.Logging.ILogger logger)
 {
     var jitterer = new Random();
     return HttpPolicyExtensions
@@ -46,7 +58,7 @@ static IAsyncPolicy<HttpResponseMessage> GetRetryPolicy(ILogger logger)
             });
 }
 
-static IAsyncPolicy<HttpResponseMessage> GetCircuitBreakerPolicy(ILogger logger)
+static IAsyncPolicy<HttpResponseMessage> GetCircuitBreakerPolicy(Microsoft.Extensions.Logging.ILogger logger)
 {
     return HttpPolicyExtensions
         .HandleTransientHttpError()
@@ -65,7 +77,7 @@ static IAsyncPolicy<HttpResponseMessage> GetTimeoutPolicy()
     return Policy.TimeoutAsync<HttpResponseMessage>(TimeSpan.FromSeconds(10), TimeoutStrategy.Optimistic);
 }
 
-static IAsyncPolicy<HttpResponseMessage> GetBulkheadPolicy(ILogger logger)
+static IAsyncPolicy<HttpResponseMessage> GetBulkheadPolicy(Microsoft.Extensions.Logging.ILogger logger)
 {
     // limit concurrent executions and queue a modest number
     var bulkhead = Policy.BulkheadAsync<HttpResponseMessage>(maxParallelization: 20, maxQueuingActions: 40, onBulkheadRejectedAsync: context =>
@@ -150,97 +162,145 @@ app.UseSwaggerUI();
 app.MapGet("/", () => "RealEstate.AI Web API")
     .Produces<string>(200);
 
-app.MapPost("/api/properties/ingest", async (IDataIngestionService ingestion) =>
+app.MapPost("/api/properties/ingest", async (IDataIngestionService ingestion, Microsoft.Extensions.Logging.ILogger<Program> logger) =>
 {
-    var items = await ingestion.IngestAllAsync();
-    return Results.Ok(items.Select(RealEstate.AI.WebApi.DTOs.PropertyDto.From));
+    try
+    {
+        var items = await ingestion.IngestAllAsync();
+        return Results.Ok(items.Select(RealEstate.AI.WebApi.DTOs.PropertyDto.From));
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Error ingesting all properties");
+        return Results.Problem("Internal error");
+    }
 })
 .Produces<IEnumerable<RealEstate.AI.WebApi.DTOs.PropertyDto>>(200);
 
-app.MapPost("/api/properties/ingest/upload", async (HttpRequest request, IDataIngestionService ingestion) =>
+app.MapPost("/api/properties/ingest/upload", async (HttpRequest request, IDataIngestionService ingestion, Microsoft.Extensions.Logging.ILogger<Program> logger) =>
 {
     if (!request.HasFormContentType) return Results.BadRequest(new { message = "Expected multipart/form-data" });
 
-    var form = await request.ReadFormAsync();
-    var file = form.Files.FirstOrDefault();
-    if (file == null) return Results.BadRequest(new { message = "No file uploaded" });
+    try
+    {
+        var form = await request.ReadFormAsync();
+        var file = form.Files.FirstOrDefault();
+        if (file == null) return Results.BadRequest(new { message = "No file uploaded" });
 
-    using var stream = file.OpenReadStream();
-    var report = await ingestion.IngestFromFileWithReportAsync(stream, file.ContentType);
-    var dto = IngestResponseDto.From(report);
-    return Results.Ok(dto);
+        using var stream = file.OpenReadStream();
+        var report = await ingestion.IngestFromFileWithReportAsync(stream, file.ContentType);
+        var dto = IngestResponseDto.From(report);
+        return Results.Ok(dto);
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Error ingesting from uploaded file");
+        return Results.Problem("Internal error");
+    }
 })
 .Produces<RealEstate.AI.WebApi.DTOs.IngestResponseDto>(200);
 
-app.MapPost("/api/properties/ingest/external", async (string connectorUrl, IDataIngestionService ingestion) =>
+app.MapPost("/api/properties/ingest/external", async (string connectorUrl, IDataIngestionService ingestion, Microsoft.Extensions.Logging.ILogger<Program> logger) =>
 {
     if (string.IsNullOrWhiteSpace(connectorUrl)) return Results.BadRequest(new { message = "connectorUrl is required" });
-    var items = await ingestion.IngestFromExternalAsync(connectorUrl);
-    return Results.Ok(items.Select(RealEstate.AI.WebApi.DTOs.PropertyDto.From));
+    try
+    {
+        var items = await ingestion.IngestFromExternalAsync(connectorUrl);
+        return Results.Ok(items.Select(RealEstate.AI.WebApi.DTOs.PropertyDto.From));
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Error ingesting from external connector {ConnectorUrl}", connectorUrl);
+        return Results.Problem("Internal error");
+    }
 })
 .Produces<IEnumerable<RealEstate.AI.WebApi.DTOs.PropertyDto>>(200);
 
-app.MapPost("/api/valuation/estimate", async (ValuationRequestDto req, IFeatureEngineeringService fe, IRegressionModelService reg, ValuationOrchestrator orchestrator, IPropertyRepository repo) =>
+app.MapPost("/api/valuation/estimate", async (ValuationRequestDto req, IFeatureEngineeringService fe, IRegressionModelService reg, ValuationOrchestrator orchestrator, IPropertyRepository repo, Microsoft.Extensions.Logging.ILogger<Program> logger) =>
 {
-    if (req == null) return Results.BadRequest();
+    try
+    {
+        if (req == null) return Results.BadRequest();
 
-    Property target = null;
-    if (req.PropertyId.HasValue)
-    {
-        target = await repo.GetByIdAsync(req.PropertyId.Value);
-        if (target == null) return Results.NotFound(new { message = "Property not found" });
-    }
-    else if (req.Property != null)
-    {
-        target = new Property
+        Property target = null;
+        if (req.PropertyId.HasValue)
         {
-            Id = Guid.NewGuid(),
-            Address = req.Property.Address,
-            AreaSqFt = req.Property.AreaSqFt,
-            YearBuilt = req.Property.YearBuilt,
-            Bedrooms = req.Property.Bedrooms,
-            Bathrooms = req.Property.Bathrooms,
-            ListedPrice = req.Property.ListedPrice,
-            Description = req.Property.Description
-        };
-    }
-    else
-    {
-        return Results.BadRequest(new { message = "No property provided" });
-    }
+            target = await repo.GetByIdAsync(req.PropertyId.Value);
+            if (target == null) return Results.NotFound(new { message = "Property not found" });
+        }
+        else if (req.Property != null)
+        {
+            target = new Property
+            {
+                Id = Guid.NewGuid(),
+                Address = req.Property.Address,
+                AreaSqFt = req.Property.AreaSqFt,
+                YearBuilt = req.Property.YearBuilt,
+                Bedrooms = req.Property.Bedrooms,
+                Bathrooms = req.Property.Bathrooms,
+                ListedPrice = req.Property.ListedPrice,
+                Description = req.Property.Description
+            };
+        }
+        else
+        {
+            return Results.BadRequest(new { message = "No property provided" });
+        }
 
-    var features = await fe.BuildFeatureVectorAsync(target);
-    var ai = await reg.PredictMarketValueAsync(features);
-    var properties = await repo.ListAsync();
-    var comps = properties.Where(p => p.Id != target.Id).ToList();
-    var summary = await orchestrator.OrchestrateAsync(target, features, comps);
-    return Results.Ok(ValuationSummaryDto.From(summary));
+        var features = await fe.BuildFeatureVectorAsync(target);
+        var ai = await reg.PredictMarketValueAsync(features);
+        var properties = await repo.ListAsync();
+        var comps = properties.Where(p => p.Id != target.Id).ToList();
+        var summary = await orchestrator.OrchestrateAsync(target, features, comps);
+        return Results.Ok(ValuationSummaryDto.From(summary));
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Error estimating valuation");
+        return Results.Problem("Internal error");
+    }
 })
 .Produces<RealEstate.AI.Core.Domain.ValuationSummary>(200);
 
-app.MapPost("/api/valuation/rank", async (IRankingModelService ranker, IFeatureEngineeringService fe, IPropertyRepository repo) =>
+app.MapPost("/api/valuation/rank", async (IRankingModelService ranker, IFeatureEngineeringService fe, IPropertyRepository repo, Microsoft.Extensions.Logging.ILogger<Program> logger) =>
 {
-    var properties = await repo.ListAsync();
-    var vectors = new System.Collections.Generic.List<PropertyFeatureVector>();
-    foreach (var p in properties)
+    try
     {
-        vectors.Add(await fe.BuildFeatureVectorAsync(p));
-    }
+        var properties = await repo.ListAsync();
+        var vectors = new System.Collections.Generic.List<PropertyFeatureVector>();
+        foreach (var p in properties)
+        {
+            vectors.Add(await fe.BuildFeatureVectorAsync(p));
+        }
 
-    var ranked = await ranker.RankPropertiesAsync(vectors, RankingCriterion.ValueForMoney);
-    return Results.Ok(ranked.Select(RealEstate.AI.WebApi.DTOs.RankedPropertyDto.From));
+        var ranked = await ranker.RankPropertiesAsync(vectors, RankingCriterion.ValueForMoney);
+        return Results.Ok(ranked.Select(RealEstate.AI.WebApi.DTOs.RankedPropertyDto.From));
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Error ranking properties");
+        return Results.Problem("Internal error");
+    }
 })
 .Produces<IEnumerable<RealEstate.AI.WebApi.DTOs.RankedPropertyDto>>(200);
 
-app.MapPost("/api/risk/assess", async (IRiskDetectionService riskService, IFeatureEngineeringService fe, IPropertyRepository repo) =>
+app.MapPost("/api/risk/assess", async (IRiskDetectionService riskService, IFeatureEngineeringService fe, IPropertyRepository repo, Microsoft.Extensions.Logging.ILogger<Program> logger) =>
 {
-    var properties = await repo.ListAsync();
-    var first = System.Linq.Enumerable.FirstOrDefault(properties);
-    if (first == null) return Results.NotFound(new { message = "No properties available" });
+    try
+    {
+        var properties = await repo.ListAsync();
+        var first = System.Linq.Enumerable.FirstOrDefault(properties);
+        if (first == null) return Results.NotFound(new { message = "No properties available" });
 
-    var features = await fe.BuildFeatureVectorAsync(first);
-    var risk = await riskService.AssessAsync(first, features);
-    return Results.Ok(RiskAssessmentDto.From(risk));
+        var features = await fe.BuildFeatureVectorAsync(first);
+        var risk = await riskService.AssessAsync(first, features);
+        return Results.Ok(RiskAssessmentDto.From(risk));
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Error assessing risk");
+        return Results.Problem("Internal error");
+    }
 })
 .Produces<RealEstate.AI.Core.Domain.RiskAssessmentResult>(200);
 
