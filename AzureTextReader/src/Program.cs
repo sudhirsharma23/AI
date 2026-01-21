@@ -17,6 +17,7 @@ using Oasis.DeedProcessor.Interface.Ocr;
 using Oasis.DeedProcessor.ServiceAgent.Azure.Llm;
 using Oasis.DeedProcessor.Host.Ocr;
 using Oasis.DeedProcessor.Host.Services;
+using Serilog;
 
 namespace Oasis.DeedProcessor
 {
@@ -31,9 +32,25 @@ namespace Oasis.DeedProcessor
 
             var builder = WebApplication.CreateBuilder(args);
 
+            // Configure Serilog from configuration (appsettings) or defaults
+            builder.Host.UseSerilog((ctx, services, configuration) =>
+            {
+                configuration
+                    .ReadFrom.Configuration(ctx.Configuration)
+                    .ReadFrom.Services(services)
+                    .Enrich.FromLogContext()
+                    .WriteTo.Console();
+
+                // Add file sink with rolling daily files if not configured via appsettings
+                configuration.WriteTo.File("logs/log-.txt", rollingInterval: RollingInterval.Day, retainedFileCountLimit: 14);
+            });
+
+            // Load configuration with environment-specific file (appsettings.{Environment}.json)
+            var envName = builder.Environment?.EnvironmentName ?? Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "";
+
             builder.Configuration.SetBasePath(Directory.GetCurrentDirectory())
                 .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
-                .AddJsonFile("appsettings.Development.json", optional: true, reloadOnChange: true)
+                .AddJsonFile($"appsettings.{envName}.json", optional: true, reloadOnChange: true)
                 .AddEnvironmentVariables();
 
             builder.Services.Configure<FileMonitorOptions>(builder.Configuration.GetSection("FileMonitor"));

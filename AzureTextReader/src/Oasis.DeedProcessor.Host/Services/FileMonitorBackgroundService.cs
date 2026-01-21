@@ -44,6 +44,13 @@ namespace Oasis.DeedProcessor.Host.Services
         private readonly IMemoryCache _memoryCache;
         private readonly ILlmService? _llmService;
 
+        // Ensures only one pair (two files) is processed at a time
+        private readonly SemaphoreSlim _pairProcessingSemaphore = new(1, 1);
+
+        // Track results for each processed base id (pair)
+        private readonly List<FileProcessResult> _processResults = new();
+        private readonly object _resultsLock = new();
+
         public FileMonitorBackgroundService(
             ILogger<FileMonitorBackgroundService> logger,
             IOcrService ocrService,
@@ -221,6 +228,27 @@ namespace Oasis.DeedProcessor.Host.Services
                     try { await processor.StopProcessingAsync(); } catch { }
                 }
                 SaveProcessedIndex();
+
+                // Persist processed pairs summary to a file in state folder
+                try
+                {
+                    SaveProcessResultsToFile();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to save processed pairs summary to file");
+                }
+
+                // Optionally log final processing results
+                try
+                {
+                    lock (_resultsLock)
+                    {
+                        _logger.LogInformation("Processed pairs summary ({Count}): {Summary}", _processResults.Count,
+                            JsonSerializer.Serialize(_processResults));
+                    }
+                }
+                catch { }
             }
         }
 
@@ -431,7 +459,17 @@ namespace Oasis.DeedProcessor.Host.Services
                             var descriptorDest = Path.Combine(_options.ProcessedFolder, Path.GetFileName(processingPath));
                             File.Move(processingPath, GetUniquePath(descriptorDest));
 
-                            await ProcessPairFilesAsync(path1, path2, ct);
+                            // Ensure only one pair is processed at a time
+                            await _pairProcessingSemaphore.WaitAsync(ct);
+                            try
+                            {
+                                await ProcessPairFilesAsync(path1, path2, ct);
+                            }
+                            finally
+                            {
+                                _pairProcessingSemaphore.Release();
+                            }
+
                             return;
                         }
                     }
@@ -520,12 +558,30 @@ namespace Oasis.DeedProcessor.Host.Services
 
         private async Task ProcessPairFilesAsync(string path1, string path2, CancellationToken ct)
         {
+            // Track pair result for reporting
+            var name1 = Path.GetFileNameWithoutExtension(path1 ?? string.Empty) ?? string.Empty;
+            var name2 = Path.GetFileNameWithoutExtension(path2 ?? string.Empty) ?? string.Empty;
+            var baseId = name1.EndsWith("-1") ? name1.Substring(0, name1.Length - 2) : (name2.EndsWith("-1") ? name2.Substring(0, name2.Length - 2) : name1);
+
+            var result = new FileProcessResult
+            {
+                BaseId = baseId,
+                MainFile = Path.GetFileName(path1),
+                SecondaryFile = Path.GetFileName(path2),
+                Success = false,
+                ErrorMessage = null,
+                V3JsonResult = null
+            };
+
             try
             {
                 if (!File.Exists(path1) || !File.Exists(path2))
                 {
                     try { MoveFileSafe(path1, _options.FailedFolder); } catch { }
                     try { MoveFileSafe(path2, _options.FailedFolder); } catch { }
+
+                    result.Success = false;
+                    result.ErrorMessage = "One or both files missing before processing";
                     return;
                 }
 
@@ -537,16 +593,25 @@ namespace Oasis.DeedProcessor.Host.Services
                 {
                     MoveFileSafe(path1, _options.ProcessedFolder);
                     MoveFileSafe(path2, _options.ProcessedFolder);
+
+                    result.Success = true;
+                    lock (_resultsLock) { _processResults.Add(result); }
                     return;
                 }
 
                 var res1 = await _ocrService.ExtractTextFromFileAsync(path1, cacheKey: null);
                 var res2 = await _ocrService.ExtractTextFromFileAsync(path2, cacheKey: null);
 
-                if ((res1 == null || !res1.Success) && (res2 == null || !res2.Success))
+                // If either failed, mark pair as failed per requirements
+                var bothSuccess = (res1 != null && res1.Success) && (res2 != null && res2.Success);
+
+                if (!bothSuccess)
                 {
-                    MoveFileSafe(path1, _options.FailedFolder);
-                    MoveFileSafe(path2, _options.FailedFolder);
+                    try { MoveFileSafe(path1, _options.FailedFolder); } catch { }
+                    try { MoveFileSafe(path2, _options.FailedFolder); } catch { }
+
+                    result.Success = false;
+                    result.ErrorMessage = $"res1.Success={res1?.Success.ToString() ?? "null"}, res2.Success={res2?.Success.ToString() ?? "null"}";
                     return;
                 }
 
@@ -581,17 +646,52 @@ namespace Oasis.DeedProcessor.Host.Services
                     _memoryCache.Set("last_merged_output", json, new MemoryCacheEntryOptions { AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(24) });
                     if (_llmService != null)
                         await _llmService.InvokeAfterOcrAsync(ct);
+
+                    // After invoking LLM, try to attach v3 result from cache if present
+                    try
+                    {
+                        if (_memoryCache.TryGetValue<string>("last_v3_cleaned_json", out var v3json))
+                        {
+                            result.V3JsonResult = v3json;
+                        }
+                        else if (_memoryCache.TryGetValue<string>("last_v3_output_path", out var v3path) && File.Exists(v3path))
+                        {
+                            result.V3JsonResult = File.ReadAllText(v3path);
+                        }
+                    }
+                    catch { }
                 }
                 catch (Exception ex)
                 {
                     _logger.LogWarning(ex, "LLM service invocation failed after paired OCR");
                 }
+
+                result.Success = true;
+                return;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error processing paired files {P1}, {P2}", path1, path2);
                 try { MoveFileSafe(path1, _options.FailedFolder); } catch { }
                 try { MoveFileSafe(path2, _options.FailedFolder); } catch { }
+
+                result.Success = false;
+                result.ErrorMessage = ex.Message;
+            }
+            finally
+            {
+                result.CompletedAt = DateTime.UtcNow;
+                lock (_resultsLock)
+                {
+                    _processResults.Add(result);
+                }
+
+                // Log each pair result
+                try
+                {
+                    _logger.LogInformation("Pair processed: {BaseId} Success={Success} Error={Error}", result.BaseId, result.Success, result.ErrorMessage);
+                }
+                catch { }
             }
         }
 
@@ -615,5 +715,44 @@ namespace Oasis.DeedProcessor.Host.Services
             _internalCts.Cancel();
             await base.StopAsync(cancellationToken);
         }
+
+        private void SaveProcessResultsToFile()
+        {
+            try
+            {
+                Directory.CreateDirectory(_options.StateFolder);
+                var timestamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
+                var fileName = $"processed_pairs_summary_{timestamp}.json";
+                var path = Path.Combine(_options.StateFolder, fileName);
+
+                List<FileProcessResult> snapshot;
+                lock (_resultsLock)
+                {
+                    snapshot = _processResults.ToList();
+                }
+
+                var json = JsonSerializer.Serialize(snapshot, new JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(path, json, Encoding.UTF8);
+                _logger.LogInformation("Saved processed pairs summary to {Path}", path);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error saving processed pairs summary to file");
+            }
+        }
+    }
+
+    // Result structure tracking processing of a pair (base id)
+    public class FileProcessResult
+    {
+        public string BaseId { get; set; }
+        public string MainFile { get; set; }
+        public string SecondaryFile { get; set; }
+        public bool Success { get; set; }
+        public string ErrorMessage { get; set; }
+        public DateTime CompletedAt { get; set; }
+
+        // New optional property to include the cleaned JSON result from V3 LLM processing
+        public string? V3JsonResult { get; set; }
     }
 }

@@ -1,0 +1,23 @@
+{
+  "profiles": {
+    "Oasis.DeedProcessor": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": false,
+      "applicationUrl": "http://localhost:5000;https://localhost:5001",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "AZURE_AI_ENDPOINT": "https://sudhir-ai-test.cognitiveservices.azure.com/",
+        "AZURE_AI_KEY": "D6byvydUsvDwA9vawJr3v9ofFOJ9Y8eJBwGL2WFjLgSIV5UDcsW6JQQJ99BKAC4f1cMXJ3w3AAAAACOGg3TC",
+        "REDIS_CONNECTION_STRING": "<REPLACE_WITH_REDIS_CONNECTION_STRING>"
+      }
+    },
+    "IIS Express": {
+      "commandName": "IISExpress",
+      "launchBrowser": true,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      }
+    }
+  }
+}

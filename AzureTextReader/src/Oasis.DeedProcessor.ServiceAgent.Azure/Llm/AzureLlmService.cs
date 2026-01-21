@@ -462,6 +462,27 @@ namespace Oasis.DeedProcessor.ServiceAgent.Azure.Llm
                 Directory.CreateDirectory(OutputDirectory);
                 var finalOutputPath = Path.Combine(OutputDirectory, $"final_output_{timestamp}{versionSuffix}.json");
                 await File.WriteAllTextAsync(finalOutputPath, cleanedJson, Encoding.UTF8, cancellationToken);
+
+                // If this is the v3 grant deed output, expose the cleaned JSON and path in the memory cache
+                try
+                {
+                    if (!string.IsNullOrEmpty(versionSuffix) && versionSuffix.IndexOf("_v3", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        _memoryCache?.Set("last_v3_cleaned_json", cleanedJson, new MemoryCacheEntryOptions
+                        {
+                            AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(1)
+                        });
+
+                        _memoryCache?.Set("last_v3_output_path", finalOutputPath, new MemoryCacheEntryOptions
+                        {
+                            AbsoluteExpirationRelativeToNow = TimeSpan.FromHours(1)
+                        });
+                    }
+                }
+                catch
+                {
+                    // Ignore caching errors
+                }
             }
             catch
             {
