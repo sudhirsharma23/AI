@@ -417,3 +417,19 @@ src/appsettings.json
 
 # Ignore license files that might contain keys
 *.lic
+
+# Ignore environment-specific appsettings and launchSettings containing secrets; keep appsettings.json and example files tracked.
+appsettings.Development.json
+appsettings.Staging.json
+appsettings.Production.json
+appsettings.*.json
+!appsettings.json
+!appsettings.json.example
+
+# launchSettings may contain environment secrets
+**/Properties/launchSettings.json
+
+# User secrets and local env files
+*.secrets.json
+.env
+.env.*
