@@ -359,28 +359,21 @@ FodyWeavers.xsd
 # SECURITY: Sensitive Configuration Files
 # ======================================
 # CRITICAL: Never commit files with real credentials!
-**/appsettings.Development.json
-**/appsettings.Local.json
-**/appsettings.Production.json
+# Ignore all appsettings JSON files (base and environment-specific)
+**/appsettings*.json
+
+# Ignore launch settings that can contain secrets
+**/Properties/launchSettings.json
+
+# Ignore user secrets and local env files
 **/*.secrets.json
-**/*_secrets.json
 local.settings.json
-
-# Environment files
 .env
-.env.local
-.env.*.local
-
-# Azure credentials
-*.publishsettings
-*.azurePubxml
-
-# AWS credentials  
-.aws/credentials
+.env.*
 
 # ======================================
 # Application Output Files
-# ======================================
+# =====================================
 # Generated JSON outputs
 clean_output_*.json
 cleaned_output_*.json
