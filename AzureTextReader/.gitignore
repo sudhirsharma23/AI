@@ -416,10 +416,8 @@ appsettings.Development.json
 appsettings.Staging.json
 appsettings.Production.json
 appsettings.Local.json
-
-# Keep base configuration tracked
-!appsettings.json
-!appsettings.json.example
+appsettings.json
+appsettings.json.example
 
 # launchSettings may contain environment secrets
 **/Properties/launchSettings.json
